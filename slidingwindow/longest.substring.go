@@ -1,5 +1,9 @@
 package slidingwindow
 
+import (
+	"bytes"
+)
+
 /**
 无重复字符的最长子串-leetcode
 
@@ -18,34 +22,41 @@ package slidingwindow
 
 */
 
-func LengthLongestSubstring(s string) int {
+func LongestSubstring(s string) string {
 
 	var (
-		window = make(map[byte]int)
-		left = 0
-		right = 0
-		l = len(s)
-		max_ = 0
+		window = make(map[byte]int16)
+		left, right = 0, 0
+		res = bytes.NewBuffer(nil)
+		maxSubstring = 0
 	)
 
-	for right < l {
+	for right < len(s) {
+
 		c := s[right]
 		window[c]++
-		right++
+
 		for window[c] > 1 {
+
+			if maxSubstring < right - left  {
+				maxSubstring = right - left
+				res.Reset()
+				res.WriteString(s[left: right])
+			}
+
 			d := s[left]
 			window[d]--
 			left++
 		}
-		max_ = max(max_, right-left+1)
+
+		right++
+
 	}
 
-	return max_
+	if res.Len() == 0 {
+		return ""
+	}
+	return res.String()
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
+
