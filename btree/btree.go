@@ -19,11 +19,12 @@ type Btree struct {
 	degree int
 }
 
-func newNode(t int) *Node {
+func newNode(t int, isLeaf bool) *Node {
 	n := &Node{
 		keys: make([][]byte, 2*t-1),
 		sibling: make([]*Node, 2*t),
 		values: make([][]byte, 2*t-1),
+		isLeaf: isLeaf,
 	}
 	return n
 }
@@ -43,22 +44,21 @@ func (tree *Btree) splitChild(parent *Node, i int) {
 
 	t := tree.degree
 
-	z := newNode(t)
-	z.num = tree.degree - 1
-	z.isLeaf = child.isLeaf
+	z := newNode(t, child.isLeaf)
+	z.num = t - 1
 
 	// copy sub child
-	copy(z.keys, child.keys[t:])
-	copy(z.values, child.values[t:])
-	if z.isLeaf {
-		copy(z.sibling, child.sibling[t:])
+	copy(z.keys, child.keys[t:2*t-1])
+	copy(z.values, child.values[t:2*t-1])
+	if !z.isLeaf {
+		copy(z.sibling, child.sibling[t:2*t])
 	}
 
 	// parent insert node in i, need expand it
 
 	// move siblings
-	copy(parent.sibling[i+2:], parent.sibling[i+1:parent.num+1])
-
+	copy(parent.sibling[i+1:], parent.sibling[i:parent.num+1])
+	child.num = t - 1
 	parent.sibling[i+1] = z
 
 	// move keys and values
@@ -68,8 +68,6 @@ func (tree *Btree) splitChild(parent *Node, i int) {
 	parent.values[i] = child.values[t-1]
 
 	parent.num++
-
-	child.num = t - 1
 }
 
 // when parent is not full, insert a node
@@ -99,30 +97,6 @@ func (tree *Btree) insertNonFull(parent *Node, key []byte, value []byte) {
 	}
 
 	tree.insertNonFull(parent.sibling[i], key, value)
-}
-
-// Insert insert key
-func (tree *Btree) Insert(key []byte, value []byte) {
-
-	if tree.root == nil {
-		s := newNode(tree.degree)
-		s.num++
-		s.isLeaf = true
-		s.keys[0] = append([]byte(nil), key...)
-		s.values[0] = append([]byte(nil), value...)
-		tree.root = s
-		return
-	}
-
-	if tree.isFull(tree.root) {
-		s := newNode(tree.degree)
-		s.sibling[0] = tree.root
-		tree.splitChild(s, 0)
-		tree.root = s
-	}
-
-	tree.insertNonFull(tree.root, key, value)
-
 }
 
 func (node *Node) get(key []byte) []byte {
@@ -294,9 +268,9 @@ func (tree *Btree) remove(node *Node, key []byte) bool {
 }
 
 func (tree *Btree) merge(node *Node, keyi int) {
-	z := newNode(tree.degree)
 	prevSibling := node.sibling[keyi]
 	nextSibling := node.sibling[keyi+1]
+	z := newNode(tree.degree, prevSibling.isLeaf)
 	copy(z.keys, nextSibling.keys[:nextSibling.num])
 	copy(z.values, nextSibling.values[:nextSibling.num])
 
@@ -316,11 +290,60 @@ func (tree *Btree) merge(node *Node, keyi int) {
 	z.num = tree.degree*2 -1
 }
 
+// NewTree new tree
+func NewTree(degree int) *Btree {
+	return &Btree{
+		degree: degree,
+	}
+}
+
+// Insert insert key
+func (tree *Btree) Insert(key []byte, value []byte) {
+
+	if tree.root == nil {
+		s := newNode(tree.degree, true)
+		s.num++
+		s.keys[0] = append([]byte(nil), key...)
+		s.values[0] = append([]byte(nil), value...)
+		tree.root = s
+		return
+	}
+
+	n := tree.root
+
+	if tree.isFull(tree.root) {
+		s := newNode(tree.degree, false)
+		s.sibling[0] = tree.root
+		tree.splitChild(s, 0)
+		tree.root = s
+		if bytes.Compare(s.keys[0], key) < 0 {
+			n = s.sibling[1]
+		} else {
+			n = s.sibling[0]
+		}
+	}
+
+	tree.insertNonFull(n, key, value)
+
+}
 
 // Remove the key
 func (tree *Btree) Remove(key []byte) bool {
 
-	// if the current
+	if tree.root == nil {
+		return false
+	}
 
+	r := tree.remove(tree.root, key)
+
+
+	if tree.root.num == 0 {
+		if tree.root.isLeaf { // case 1 if root node is leaf and empty
+			tree.root = nil
+		} else { // case 2 root merge with left and right sibling
+			tree.root = tree.root.sibling[0]
+		}
+	}
+	return r
 
 }
