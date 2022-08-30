@@ -270,24 +270,22 @@ func (tree *Btree) remove(node *Node, key []byte) bool {
 func (tree *Btree) merge(node *Node, keyi int) {
 	prevSibling := node.sibling[keyi]
 	nextSibling := node.sibling[keyi+1]
-	z := newNode(tree.degree, prevSibling.isLeaf)
-	copy(z.keys, nextSibling.keys[:nextSibling.num])
-	copy(z.values, nextSibling.values[:nextSibling.num])
-
-	if !nextSibling.isLeaf {
-		copy(z.sibling, nextSibling.sibling[:nextSibling.num+1])
-	}
 
 	// node idx key will be move to siblings, so sibling [idx+1:num+1] will move forward [idx:num+1],
 	// and key will do the same
-	copy(z.sibling[keyi:z.num+1], z.sibling[keyi+1:z.num+1])
-	copy(z.keys[keyi:z.num], z.keys[keyi:z.num])
+	copy(node.sibling[keyi+1:node.num+1], node.sibling[keyi+2:node.num+1])
+	copy(node.keys[keyi:node.num], node.keys[keyi+1:node.num])
 	node.num--
 
 	prevSibling.keys[prevSibling.num] = node.keys[keyi]
 	copy(prevSibling.keys[prevSibling.num+1:], nextSibling.keys[:nextSibling.num])
-	copy(prevSibling.sibling[prevSibling.num+1:], nextSibling.sibling[:nextSibling.num])
-	z.num = tree.degree*2 -1
+	if prevSibling.isLeaf {
+		copy(prevSibling.sibling[prevSibling.num+1:], nextSibling.sibling[:nextSibling.num+1])
+	}
+
+	prevSibling.num = tree.degree*2 -1
+
+	nextSibling = nil // help gc
 }
 
 // NewTree new tree
