@@ -7,30 +7,30 @@ import (
 
 // Node node
 type Node struct {
-	keys  [][]byte
-	values [][]byte
+	keys    [][]byte
+	values  [][]byte
 	sibling []*Node
-	num   int
-	isLeaf bool
+	num     int
+	isLeaf  bool
 }
 
 type Btree struct {
-	root *Node
+	root   *Node
 	degree int
 }
 
 func newNode(t int, isLeaf bool) *Node {
 	n := &Node{
-		keys: make([][]byte, 2*t-1),
+		keys:    make([][]byte, 2*t-1),
 		sibling: make([]*Node, 2*t),
-		values: make([][]byte, 2*t-1),
-		isLeaf: isLeaf,
+		values:  make([][]byte, 2*t-1),
+		isLeaf:  isLeaf,
 	}
 	return n
 }
 
 func (tree *Btree) isFull(n *Node) bool {
-	return n.num == 2 * tree.degree - 1
+	return n.num == 2*tree.degree-1
 }
 
 // split child when node is full
@@ -148,7 +148,7 @@ func (tree *Btree) remove(node *Node, key []byte) bool {
 			// just the internal node
 			// case 1:
 			// if left sibling keys num gte t, then switch the position between node and its previous node
-			if node.sibling[idx].num > tree.degree - 1 {
+			if node.sibling[idx].num > tree.degree-1 {
 
 				previous := node.sibling[idx]
 				for !previous.isLeaf {
@@ -158,7 +158,7 @@ func (tree *Btree) remove(node *Node, key []byte) bool {
 				previous.keys[previous.num-1], node.keys[idx] = node.keys[idx], previous.keys[previous.num-1]
 				previous.values[previous.num-1], node.values[idx] = node.values[idx], previous.values[previous.num-1]
 				tree.remove(node.sibling[idx], key)
-			} else if node.sibling[idx+1].num > tree.degree - 1 {
+			} else if node.sibling[idx+1].num > tree.degree-1 {
 				// case 2:
 				// this case is similar to the case 1
 				next := node.sibling[idx+1]
@@ -186,10 +186,10 @@ func (tree *Btree) remove(node *Node, key []byte) bool {
 		}
 
 		// sibling need to steal or merge with neighbor sibling
-		if node.sibling[idx].num == tree.degree - 1 {
+		if node.sibling[idx].num == tree.degree-1 {
 
 			// left sibling is enough to borrow
-			if idx != 0 && node.sibling[idx-1].num > tree.degree - 1 {
+			if idx != 0 && node.sibling[idx-1].num > tree.degree-1 {
 
 				cur := node.sibling[idx]
 				pre := node.sibling[idx-1]
@@ -211,18 +211,18 @@ func (tree *Btree) remove(node *Node, key []byte) bool {
 				node.values[idx] = pre.values[pre.num-1]
 
 				// step 3: change pre node
-				pre.keys[pre.num-1] = nil // help gc
+				pre.keys[pre.num-1] = nil   // help gc
 				pre.values[pre.num-1] = nil // help gc
-				pre.sibling[pre.num] = nil // help gc
+				pre.sibling[pre.num] = nil  // help gc
 
 				pre.num--
 
 				tree.remove(cur, key)
 
-			} else if idx != node.num && node.sibling[idx].num > tree.degree - 1 { // right sibling is enough to borrow
+			} else if idx != node.num && node.sibling[idx].num > tree.degree-1 { // right sibling is enough to borrow
 
 				cur := node.sibling[idx]
-				next:= node.sibling[idx+1]
+				next := node.sibling[idx+1]
 
 				// step 1
 				// change cur sibling (if have) and keys
@@ -231,7 +231,6 @@ func (tree *Btree) remove(node *Node, key []byte) bool {
 					cur.sibling[cur.num+1] = next.sibling[0]
 				}
 				cur.num++
-
 
 				// step 2
 				// change node
@@ -283,7 +282,7 @@ func (tree *Btree) merge(node *Node, keyi int) {
 		copy(prevSibling.sibling[prevSibling.num+1:], nextSibling.sibling[:nextSibling.num+1])
 	}
 
-	prevSibling.num = tree.degree*2 -1
+	prevSibling.num = tree.degree*2 - 1
 
 	nextSibling = nil // help gc
 }
@@ -333,7 +332,6 @@ func (tree *Btree) Remove(key []byte) bool {
 	}
 
 	r := tree.remove(tree.root, key)
-
 
 	if tree.root.num == 0 {
 		if tree.root.isLeaf { // case 1 if root node is leaf and empty

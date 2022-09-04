@@ -8,7 +8,7 @@ func TestBtree_InsertAndGet(t *testing.T) {
 
 	// new tree with 3 degree
 	tree := NewTree(3)
-	for i:=uint8(0);i<100;i++ {
+	for i := uint8(0); i < 100; i++ {
 		tree.Insert([]byte{i}, []byte{i})
 	}
 
