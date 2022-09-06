@@ -71,6 +71,12 @@ type BPlusTree struct {
 	degree int
 }
 
+func NewPlusTree(degree int) *BPlusTree {
+	return &BPlusTree{
+		degree: degree,
+	}
+}
+
 func (tree *BPlusTree) Insert(key []byte, data []byte) {
 
 	if tree.root == nil {
@@ -313,8 +319,8 @@ func mergeBranch(left *BranchNode, right *BranchNode, parentIdx int) {
 	copy(parent.keys[parentIdx:parent.num-1], parent.keys[parentIdx+1:parent.num])
 	copy(parent.siblings[parentIdx+1:parent.num], parent.siblings[parentIdx+2:parent.num+1])
 
-	parent.keys = parent.keys[:parent.num-1]
-	parent.siblings = parent.siblings[:parent.num]
+	parent.keys[parent.num-1] = nil
+	parent.siblings[parent.num] = nil
 
 	parent.num--
 }
@@ -328,8 +334,8 @@ func (branch *BranchNode) borrowPrevSiblings(prev *BranchNode, idx int) {
 	branch.num++
 
 	branch.parent.keys[idx-1] = prev.keys[prev.num-1]
-	prev.keys = prev.keys[:prev.num-1]
-	prev.siblings = prev.siblings[:prev.num]
+	prev.keys[prev.num-1] = nil
+	prev.siblings[prev.num] = nil
 	prev.num--
 }
 
@@ -357,7 +363,7 @@ func (leafNode *LeafNode) Insert(key []byte, data []byte) (bool, []byte,
 		return bytes.Compare(leafNode.keys[i], key) >= 0
 	})
 
-	if bytes.Compare(leafNode.keys[idx], key) == 0 {
+	if idx < leafNode.num && bytes.Compare(leafNode.keys[idx], key) == 0 {
 		leafNode.values[idx] = append([]byte(nil), data...)
 		return false, nil, nil, nil
 	}
@@ -366,6 +372,7 @@ func (leafNode *LeafNode) Insert(key []byte, data []byte) (bool, []byte,
 
 		z := newLeafNode(leafNode.degree, leafNode.parent)
 		copy(z.keys, leafNode.keys[leafNode.degree-1:leafNode.num])
+		copy(z.values, leafNode.values[leafNode.degree-1:leafNode.num])
 		z.num = leafNode.degree
 		splitKey := z.keys[0]
 		z.prev = leafNode
@@ -413,8 +420,8 @@ func (leafNode *LeafNode) Remove(key []byte) bool {
 	copy(leafNode.keys[idx:leafNode.num-1], leafNode.keys[idx+1:leafNode.num])
 	copy(leafNode.values[idx:leafNode.num-1], leafNode.values[idx+1:leafNode.num])
 
-	leafNode.keys = leafNode.keys[:leafNode.num]
-	leafNode.values = leafNode.values[:leafNode.num]
+	leafNode.keys[leafNode.num] = nil
+	leafNode.values[leafNode.num] = nil
 	leafNode.num--
 
 	return true
@@ -440,8 +447,8 @@ func (leafNode *LeafNode) borrowPrevSibling(parentIdx int) {
 	copy(leafNode.values[1:leafNode.num+1], leafNode.values[:leafNode.num])
 	leafNode.keys[0] = prev.keys[prev.num-1]
 	leafNode.values[0] = prev.values[prev.num-1]
-	prev.keys = prev.keys[:prev.num-1]
-	prev.values = prev.values[:prev.num-1]
+	prev.keys[prev.num-1] = nil
+	prev.values[prev.num-1] = nil
 	leafNode.num++
 	prev.num--
 	leafNode.parent.changeKey(leafNode, parentIdx-1)
@@ -454,8 +461,8 @@ func (leafNode *LeafNode) borrowNextSibling(parentIdx int) {
 	leafNode.num++
 	copy(next.keys[0:next.num-1], next.keys[1:next.num])
 	copy(next.values[0:next.num-1], next.values[1:next.num])
-	next.keys = next.keys[:next.num-1]
-	next.values = next.values[:next.num-1]
+	next.keys[next.num-1] = nil
+	next.values[next.num-1] = nil
 
 	next.num--
 	next.parent.changeKey(next, parentIdx)
@@ -469,8 +476,8 @@ func mergeLeaf(left *LeafNode, right *LeafNode, parentIdx int) {
 	if left.parent != nil {
 		copy(left.parent.keys[parentIdx-1:left.parent.num-1], left.parent.keys[parentIdx:left.parent.num])
 		copy(left.parent.siblings[parentIdx-1:left.parent.num], left.parent.siblings[parentIdx:left.parent.num+1])
-		left.parent.keys = left.parent.keys[:left.parent.num-1]
-		left.parent.siblings = left.parent.siblings[:left.parent.num]
+		left.parent.keys[left.parent.num-1] = nil
+		left.parent.siblings[left.parent.num] = nil
 		left.parent.num--
 	}
 }
