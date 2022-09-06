@@ -7,8 +7,10 @@ import (
 func TestBPlusTree_Insert(t *testing.T) {
 
 	tree := NewPlusTree(3)
-	for i := uint8(0); i < 20; i++ {
+	for i := uint8(0); i < 10; i++ {
 		tree.Insert([]byte{i}, []byte{i})
 	}
+
+	tree.BFS()
 
 }

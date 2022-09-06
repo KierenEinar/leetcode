@@ -2,6 +2,8 @@ package bplustree
 
 import (
 	"bytes"
+	"container/list"
+	"fmt"
 	"sort"
 	"unsafe"
 )
@@ -75,6 +77,69 @@ func NewPlusTree(degree int) *BPlusTree {
 	return &BPlusTree{
 		degree: degree,
 	}
+}
+
+func (tree *BPlusTree) BFS() {
+	if tree.root == nil {
+		return
+	}
+
+	isLeaf := (*bool)(tree.root)
+	if *isLeaf {
+		leaf := (*LeafNode)(tree.root)
+		k, v := leaf.Pretty()
+		fmt.Printf("level 0, keys=%v, values=%v\n", k, v)
+		return
+	}
+
+	branch := (*BranchNode)(tree.root)
+	branch.Pretty()
+}
+
+func (branch *BranchNode) Pretty() {
+
+	queue := list.New()
+	queue.PushBack(unsafe.Pointer(branch))
+	level := 0
+	for queue.Len() > 0 {
+		ele := queue.Front()
+		queue.Remove(ele)
+		ptr := ele.Value.(unsafe.Pointer)
+		isLeaf := *(*bool)(ptr)
+
+		if !isLeaf {
+			branchNode := *(*BranchNode)(ptr)
+			if branchNode.parent != nil && branchNode.parent.siblings[0] == ptr {
+				level++
+			}
+		} else {
+			leafNode := *(*LeafNode)(ptr)
+			if leafNode.parent != nil && leafNode.parent.siblings[0] == ptr {
+				level++
+			}
+		}
+
+		if !isLeaf {
+			branchNode := *(*BranchNode)(ptr)
+			fmt.Printf("level=%d, keys=%v\n", level, branchNode.keys)
+			for idx := range branchNode.siblings[:branchNode.num+1] {
+				queue.PushBack(branchNode.siblings[idx])
+			}
+		} else {
+			leafNode := *(*LeafNode)(ptr)
+			fmt.Printf("leaf level=%d, keys=%v, values=%v\n", level, leafNode.keys, leafNode.values)
+		}
+	}
+}
+
+func (leaf *LeafNode) Pretty() (keys [][]byte, values [][]byte) {
+	keys = make([][]byte, len(leaf.keys))
+	values = make([][]byte, len(leaf.keys))
+	for idx := range leaf.keys {
+		keys[idx] = leaf.keys[idx]
+		values[idx] = leaf.values[idx]
+	}
+	return
 }
 
 func (tree *BPlusTree) Insert(key []byte, data []byte) {
@@ -319,8 +384,8 @@ func mergeBranch(left *BranchNode, right *BranchNode, parentIdx int) {
 	copy(parent.keys[parentIdx:parent.num-1], parent.keys[parentIdx+1:parent.num])
 	copy(parent.siblings[parentIdx+1:parent.num], parent.siblings[parentIdx+2:parent.num+1])
 
-	parent.keys[parent.num-1] = nil
-	parent.siblings[parent.num] = nil
+	//parent.keys[parent.num-1] = nil
+	//parent.siblings[parent.num] = nil
 
 	parent.num--
 }
@@ -334,8 +399,8 @@ func (branch *BranchNode) borrowPrevSiblings(prev *BranchNode, idx int) {
 	branch.num++
 
 	branch.parent.keys[idx-1] = prev.keys[prev.num-1]
-	prev.keys[prev.num-1] = nil
-	prev.siblings[prev.num] = nil
+	//prev.keys[prev.num-1] = nil
+	//prev.siblings[prev.num] = nil
 	prev.num--
 }
 
@@ -383,7 +448,6 @@ func (leafNode *LeafNode) Insert(key []byte, data []byte) (bool, []byte,
 		}
 
 		leafNode.num = leafNode.degree - 1
-		leafNode.keys = leafNode.keys[0 : leafNode.degree-1]
 
 		if idx >= leafNode.degree-1 {
 			z.insertNonFull(key, data, idx-leafNode.degree+1)
@@ -420,8 +484,8 @@ func (leafNode *LeafNode) Remove(key []byte) bool {
 	copy(leafNode.keys[idx:leafNode.num-1], leafNode.keys[idx+1:leafNode.num])
 	copy(leafNode.values[idx:leafNode.num-1], leafNode.values[idx+1:leafNode.num])
 
-	leafNode.keys[leafNode.num] = nil
-	leafNode.values[leafNode.num] = nil
+	//leafNode.keys[leafNode.num] = nil
+	//leafNode.values[leafNode.num] = nil
 	leafNode.num--
 
 	return true
@@ -447,8 +511,8 @@ func (leafNode *LeafNode) borrowPrevSibling(parentIdx int) {
 	copy(leafNode.values[1:leafNode.num+1], leafNode.values[:leafNode.num])
 	leafNode.keys[0] = prev.keys[prev.num-1]
 	leafNode.values[0] = prev.values[prev.num-1]
-	prev.keys[prev.num-1] = nil
-	prev.values[prev.num-1] = nil
+	//prev.keys[prev.num-1] = nil
+	//prev.values[prev.num-1] = nil
 	leafNode.num++
 	prev.num--
 	leafNode.parent.changeKey(leafNode, parentIdx-1)
@@ -461,8 +525,8 @@ func (leafNode *LeafNode) borrowNextSibling(parentIdx int) {
 	leafNode.num++
 	copy(next.keys[0:next.num-1], next.keys[1:next.num])
 	copy(next.values[0:next.num-1], next.values[1:next.num])
-	next.keys[next.num-1] = nil
-	next.values[next.num-1] = nil
+	//next.keys[next.num-1] = nil
+	//next.values[next.num-1] = nil
 
 	next.num--
 	next.parent.changeKey(next, parentIdx)
@@ -476,8 +540,8 @@ func mergeLeaf(left *LeafNode, right *LeafNode, parentIdx int) {
 	if left.parent != nil {
 		copy(left.parent.keys[parentIdx-1:left.parent.num-1], left.parent.keys[parentIdx:left.parent.num])
 		copy(left.parent.siblings[parentIdx-1:left.parent.num], left.parent.siblings[parentIdx:left.parent.num+1])
-		left.parent.keys[left.parent.num-1] = nil
-		left.parent.siblings[left.parent.num] = nil
+		//left.parent.keys[left.parent.num-1] = nil
+		//left.parent.siblings[left.parent.num] = nil
 		left.parent.num--
 	}
 }
