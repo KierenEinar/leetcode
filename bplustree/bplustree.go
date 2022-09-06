@@ -127,7 +127,8 @@ func (branch *BranchNode) Pretty() {
 			}
 		} else {
 			leafNode := *(*LeafNode)(ptr)
-			fmt.Printf("leaf level=%d, keys=%v, values=%v\n", level, leafNode.keys, leafNode.values)
+			fmt.Printf("leaf level=%d, keys=%v, values=%v\n", level,
+				leafNode.keys[:leafNode.num], leafNode.values[:leafNode.num])
 		}
 	}
 }
@@ -181,6 +182,7 @@ func (tree *BPlusTree) Insert(key []byte, data []byte) {
 		rightNode.parent = branchNode
 	}
 	branchNode.keys[0] = returnKey
+	branchNode.num = 1
 	branchNode.siblings[0] = left
 	branchNode.siblings[1] = right
 	tree.root = unsafe.Pointer(branchNode)
@@ -255,6 +257,10 @@ func (branch *BranchNode) Insert(key []byte, data []byte) (bool, []byte,
 	idx := sort.Search(branch.num, func(i int) bool {
 		return bytes.Compare(branch.keys[i], key) >= 0
 	})
+
+	if idx != branch.num && bytes.Compare(branch.keys[idx], key) == 0 {
+		idx++
+	}
 
 	if branch.isFull() {
 
@@ -452,7 +458,7 @@ func (leafNode *LeafNode) Insert(key []byte, data []byte) (bool, []byte,
 		if idx >= leafNode.degree-1 {
 			z.insertNonFull(key, data, idx-leafNode.degree+1)
 		} else {
-			z.insertNonFull(key, data, idx)
+			leafNode.insertNonFull(key, data, idx)
 		}
 		return true, splitKey, unsafe.Pointer(leafNode), unsafe.Pointer(z)
 
