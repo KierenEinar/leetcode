@@ -11,16 +11,32 @@ import (
 func TestBPlusTree_Insert(t *testing.T) {
 
 	tree := NewPlusTree(3)
-	for i := uint8(0); i < 255; i++ {
+	for i := uint8(0); i < 15; i++ {
 		tree.Insert([]byte{i}, []byte{i})
 	}
 
+	//tree.Get([]byte{15})
+
 	tree.BFS()
 
-	for i := uint8(0); i < 255; i++ {
-		v := tree.Get([]byte{i})
-		t.Logf("key=%d,value=%d", i, v)
-	}
+	//for i := uint8(0); i < 255; i++ {
+	//	v := tree.Get([]byte{i})
+	//	t.Logf("key=%d,value=%d", i, v)
+	//}
+	//
+	//removed := tree.Remove([]byte{254})
+	//t.Logf("removed=%v", removed)
+	//
+	//removed = tree.Remove([]byte{253})
+	//t.Logf("removed=%v", removed)
+	//
+	//removed = tree.Remove([]byte{252})
+	//t.Logf("removed=%v", removed)
+	//
+	//removed = tree.Remove([]byte{251})
+	//t.Logf("removed=%v", removed)
+
+	//tree.BFS()
 
 }
 
