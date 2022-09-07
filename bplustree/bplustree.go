@@ -121,7 +121,7 @@ func (branch *BranchNode) Pretty() {
 
 		if !isLeaf {
 			branchNode := *(*BranchNode)(ptr)
-			fmt.Printf("level=%d, keys=%v\n", level, branchNode.keys)
+			fmt.Printf("level=%d, keys=%v\n", level, branchNode.keys[:branchNode.num])
 			for idx := range branchNode.siblings[:branchNode.num+1] {
 				queue.PushBack(branchNode.siblings[idx])
 			}
@@ -136,7 +136,7 @@ func (branch *BranchNode) Pretty() {
 func (leaf *LeafNode) Pretty() (keys [][]byte, values [][]byte) {
 	keys = make([][]byte, len(leaf.keys))
 	values = make([][]byte, len(leaf.keys))
-	for idx := range leaf.keys {
+	for idx := range leaf.keys[:leaf.num] {
 		keys[idx] = leaf.keys[idx]
 		values[idx] = leaf.values[idx]
 	}
@@ -236,17 +236,17 @@ func (branch *BranchNode) Get(key []byte) []byte {
 		return bytes.Compare(branch.keys[i], key) >= 0
 	})
 
-	if bytes.Compare(branch.keys[idx], key) == 0 {
+	if idx != branch.degree*2-1 && bytes.Compare(branch.keys[idx], key) == 0 {
 		idx++
 	}
 
 	isLeaf := *(*bool)(branch.siblings[idx])
 	if isLeaf {
-		sibling := *(*BranchNode)(branch.siblings[idx])
+		sibling := *(*LeafNode)(branch.siblings[idx])
 		return sibling.Get(key)
 	}
 
-	sibling := *(*LeafNode)(branch.siblings[idx])
+	sibling := *(*BranchNode)(branch.siblings[idx])
 	return sibling.Get(key)
 
 }
@@ -270,9 +270,6 @@ func (branch *BranchNode) Insert(key []byte, data []byte) (bool, []byte,
 		z.num = branch.degree - 1
 
 		splitKey := branch.keys[branch.degree-1]
-
-		branch.keys = branch.keys[:branch.degree-1]
-		branch.siblings = branch.siblings[:branch.degree]
 		branch.num = branch.degree - 1
 
 		if idx > branch.degree-1 {
@@ -500,14 +497,18 @@ func (leafNode *LeafNode) Remove(key []byte) bool {
 func (leafNode *LeafNode) Get(key []byte) []byte {
 
 	idx := sort.Search(leafNode.num, func(i int) bool {
-		return bytes.Compare(leafNode.keys[i], key) == 0
+		return bytes.Compare(leafNode.keys[i], key) >= 0
 	})
 
 	if idx == leafNode.num {
 		return nil
 	}
 
-	return leafNode.values[idx]
+	if bytes.Compare(leafNode.keys[idx], key) == 0 {
+		return leafNode.values[idx]
+	}
+
+	return nil
 }
 
 func (leafNode *LeafNode) borrowPrevSibling(parentIdx int) {
