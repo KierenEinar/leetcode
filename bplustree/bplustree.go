@@ -18,6 +18,12 @@ type node struct {
 	inode
 }
 
+type Iterator interface {
+	Next() bool
+	Key() []byte
+	Value() []byte
+}
+
 type inode struct {
 	values [][]byte
 	prev   *node
@@ -33,7 +39,7 @@ func (node *node) isEnough() bool {
 }
 
 func (node *node) canBorrow() bool {
-	return node.degree == node.num
+	return node.num >= node.degree
 }
 
 func newNode(degree int, parent *node, isLeaf bool) *node {
@@ -78,11 +84,11 @@ func (n *node) Pretty() {
 	// dfs first sibling
 	path := n
 	for {
-		ptr := path.siblings[0]
-		levelFirstPtrM[unsafe.Pointer(ptr)] = struct{}{}
-		if ptr.isLeaf {
+		if path.isLeaf {
 			break
 		}
+		ptr := path.siblings[0]
+		levelFirstPtrM[unsafe.Pointer(ptr)] = struct{}{}
 		path = ptr
 	}
 
@@ -234,6 +240,14 @@ func (branch *node) split() *node {
 		sibling := z.siblings[idx]
 		sibling.parent = z
 	}
+
+	if branch.num > 0 && z.num > 0 {
+		prev := branch.siblings[branch.num]
+		next := z.siblings[0]
+		prev.next = next
+		next.prev = prev
+	}
+
 	return z
 }
 
@@ -287,12 +301,11 @@ func insertLeaf(n *node, key []byte, data []byte) (bool, []byte,
 		z.num = n.degree
 		splitKey := z.keys[0]
 		z.prev = n
+		z.next = n.next
 		if n.next != nil {
-			z.next = n.next
 			n.next.prev = z
-			n.next = z
 		}
-
+		n.next = z
 		n.num = n.degree - 1
 
 		if idx >= n.degree-1 {
@@ -331,7 +344,7 @@ func (tree *BPlusTree) Remove(key []byte) bool {
 	if isLeaf {
 		flag = leafRemove(root, key)
 	} else {
-		branchRemove(root, key)
+		flag = branchRemove(root, key)
 	}
 
 	if !flag {
@@ -402,16 +415,21 @@ func reBalanceBranch(branch *node, parent *node, idx int) {
 func mergeBranch(left *node, right *node, parent *node, parentIdx int) {
 
 	left.keys[left.num] = parent.keys[parentIdx]
-	left.num += right.num + 1
 
 	copy(left.keys[left.num+1:left.num+1+right.num], right.keys[:right.num])
 	copy(left.siblings[left.num+1:left.num+right.num+2], right.siblings[:right.num+1])
+
+	left.num += right.num + 1
 
 	copy(parent.keys[parentIdx:parent.num-1], parent.keys[parentIdx+1:parent.num])
 	copy(parent.siblings[parentIdx+1:parent.num], parent.siblings[parentIdx+2:parent.num+1])
 
 	parent.keys[parent.num-1] = nil
 	parent.siblings[parent.num] = nil
+
+	for idx := range right.siblings[:right.num+1] {
+		right.siblings[idx].parent = left
+	}
 
 	parent.num--
 }
@@ -506,7 +524,7 @@ func mergeLeaf(left *node, right *node, parent *node, rightNodeParentIdx int) {
 	left.num += right.num
 
 	copy(parent.keys[rightNodeParentIdx-1:parent.num-1], parent.keys[rightNodeParentIdx:parent.num])
-	copy(parent.siblings[rightNodeParentIdx-1:parent.num], parent.siblings[rightNodeParentIdx:parent.num+1])
+	copy(parent.siblings[rightNodeParentIdx:parent.num], parent.siblings[rightNodeParentIdx+1:parent.num+1])
 	parent.keys[parent.num-1] = nil
 	parent.siblings[parent.num] = nil
 	parent.num--
@@ -519,7 +537,7 @@ func mergeLeaf(left *node, right *node, parent *node, rightNodeParentIdx int) {
 
 func reBalanceLeaf(leafNode *node, parent *node, parentIdx int) {
 
-	if leafNode.parent == nil { // root node
+	if parent == nil { // root node
 		return
 	}
 
