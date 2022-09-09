@@ -230,22 +230,15 @@ func insertBranch(branch *node, key []byte, data []byte) (bool, []byte,
 	return false, nil, nil, nil
 }
 
-func (branch *node) split() *node {
-	z := newNode(branch.degree, branch.parent, branch.isLeaf)
-	copy(z.keys, branch.keys[branch.degree:branch.num])
-	copy(z.siblings, branch.siblings[branch.degree:branch.num+1])
-	z.num = branch.degree - 1
+func (n *node) split() *node {
+	z := newNode(n.degree, n.parent, n.isLeaf)
+	copy(z.keys, n.keys[n.degree:n.num])
+	copy(z.siblings, n.siblings[n.degree:n.num+1])
+	z.num = n.degree - 1
 
 	for idx := range z.siblings[:z.num+1] {
 		sibling := z.siblings[idx]
 		sibling.parent = z
-	}
-
-	if branch.num > 0 && z.num > 0 {
-		prev := branch.siblings[branch.num]
-		next := z.siblings[0]
-		prev.next = next
-		next.prev = prev
 	}
 
 	return z
