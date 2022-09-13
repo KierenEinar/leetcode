@@ -79,7 +79,7 @@ func (dijkstra *DijkstraShortestPath) hasPathTo(v int) bool {
 	return dijkstra.u[v] < math.MaxInt64
 }
 
-func (dijkstra *DijkstraShortestPath) costToPath(v int) int {
+func (dijkstra *DijkstraShortestPath) minimumCostToPath(v int) int {
 	return dijkstra.u[v]
 }
 
