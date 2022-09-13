@@ -1,19 +1,35 @@
 package graph
 
-import "math"
+import (
+	"container/list"
+	"math"
+)
 
 type DijkstraShortestPath struct {
 	// declare u, s collection, u is the shortest collection, s is the pending calculate shortest collection
 	u      []int
 	s      []int
-	edgeTo []DiEdgeWeight // edgeTo is the shortest path
+	edgeTo []*DiEdgeWeight // edgeTo is the shortest path
+	g      *DiEdgeWeightedGraph
+	start  int
 }
 
-func (dijkstra *DijkstraShortestPath) ShortestPath(g *DiEdgeWeightedGraph, start int) {
+func NewDijkstraShortestPath(g *DiEdgeWeightedGraph, start int) *DijkstraShortestPath {
+	sp := &DijkstraShortestPath{
+		g:     g,
+		start: start,
+	}
+	sp.shortestPath()
+	return sp
+}
+
+func (dijkstra *DijkstraShortestPath) shortestPath() {
+	g := dijkstra.g
+	start := dijkstra.start
 
 	dijkstra.u = make([]int, g.v)
 	dijkstra.s = make([]int, math.MaxInt64, g.v)
-	dijkstra.edgeTo = make([]DiEdgeWeight, g.v)
+	dijkstra.edgeTo = make([]*DiEdgeWeight, g.v)
 	visited := make([]bool, g.v)
 
 	// init start to start weight is 0
@@ -53,8 +69,33 @@ func (dijkstra *DijkstraShortestPath) ShortestPath(g *DiEdgeWeightedGraph, start
 			to := edge.to
 			if dijkstra.s[to] > dijkstra.s[from]+edge.weight {
 				dijkstra.s[to] = dijkstra.s[from] + edge.weight
-				dijkstra.edgeTo[to] = edge
+				dijkstra.edgeTo[to] = &edge
 			}
 		}
 	}
+}
+
+func (dijkstra *DijkstraShortestPath) hasPathTo(v int) bool {
+	return dijkstra.u[v] < math.MaxInt64
+}
+
+func (dijkstra *DijkstraShortestPath) costToPath(v int) int {
+	return dijkstra.u[v]
+}
+
+func (dijkstra *DijkstraShortestPath) paths(v int) *list.List {
+	if !dijkstra.hasPathTo(v) {
+		return nil
+	}
+	stack := list.New()
+	to := v
+	for {
+		edge := dijkstra.edgeTo[to]
+		if edge == nil {
+			break
+		}
+		stack.PushFront(edge.to)
+		to = edge.from
+	}
+	return stack
 }
