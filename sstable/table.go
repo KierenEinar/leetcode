@@ -11,6 +11,13 @@ const kMaxSequenceNum = (uint64(1) << 56) - 1
 
 type internalKey []byte
 
+type compressionType uint8
+
+const (
+	compressionTypeNone   compressionType = 0
+	compressionTypeSnappy compressionType = 1
+)
+
 func (ik internalKey) assert() {
 	if len(ik) < 8 {
 		panic("invalid internal key")
