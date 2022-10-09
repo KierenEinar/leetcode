@@ -13,9 +13,12 @@ const (
 
 	// 默认合并s0如果扩大那么要检查s0+s1不能超过25个文件
 	defaultCompactionExpandS0LimitFactor = 25
+
+	// data block的size
+	defaultDataBlockSize = 1 << 11 // 2k
 )
 
-func buildInternalKey(dst, uKey []byte, kt keyType, sequence uint64) internalKey {
+func buildInternalKey(dst, uKey []byte, kt keyType, sequence uint64) InternalKey {
 	dst = ensureBuffer(dst, len(dst)+8)
 	n := copy(dst, uKey)
 	binary.LittleEndian.PutUint64(dst[n:], (sequence<<8)|uint64(kt))
@@ -30,10 +33,10 @@ func ensureBuffer(dst []byte, size int) []byte {
 }
 
 type iterator interface {
-	seek(key internalKey) bool
+	seek(key InternalKey) bool
 	first() bool
 	next() bool
-	key() internalKey
+	key() InternalKey
 	value() []byte
 }
 
@@ -44,7 +47,7 @@ type iteratorIndexer interface {
 
 type emptyIterator struct{}
 
-func (ei *emptyIterator) seek(key internalKey) bool {
+func (ei *emptyIterator) seek(key InternalKey) bool {
 	return false
 }
 
@@ -56,7 +59,7 @@ func (ei *emptyIterator) next() bool {
 	return false
 }
 
-func (ei *emptyIterator) key() internalKey {
+func (ei *emptyIterator) key() InternalKey {
 	return nil
 }
 
@@ -65,13 +68,13 @@ func (ei *emptyIterator) value() []byte {
 }
 
 type Compaction struct {
-	inputLevel   int
-	cPtr         internalKey
-	sFiles       [2]sFiles
-	levels       Levels
-	tableSize    int
-	tableBuilder *tableBuilder
-	minSeq       uint64
+	inputLevel  int
+	cPtr        InternalKey
+	sFiles      [2]sFiles
+	levels      Levels
+	tableSize   int
+	tableWriter *tableWriter
+	minSeq      uint64
 
 	// grandparent overlapped
 	gp                sFiles
@@ -110,7 +113,7 @@ func (fileMeta *FileMeta) pickCompaction() *Compaction {
 
 }
 
-func (fileMeta *FileMeta) finishCompactionOutputFile(builder *tableBuilder) error {
+func (fileMeta *FileMeta) finishCompactionOutputFile(tableWriter *tableWriter) error {
 	return nil
 }
 
@@ -130,8 +133,8 @@ func (fileMeta *FileMeta) doCompaction(compaction *Compaction) error {
 		var drop = false
 
 		ikey := iter.key()
-		if compaction.tableBuilder != nil && compaction.shouldStopBefore(ikey) {
-			err := fileMeta.finishCompactionOutputFile(compaction.tableBuilder)
+		if compaction.tableWriter != nil && compaction.shouldStopBefore(ikey) {
+			err := fileMeta.finishCompactionOutputFile(compaction.tableWriter)
 			if err != nil {
 				return err
 			}
@@ -159,17 +162,17 @@ func (fileMeta *FileMeta) doCompaction(compaction *Compaction) error {
 		}
 
 		if !drop {
-			if compaction.tableBuilder == nil {
+			if compaction.tableWriter == nil {
 				builder, err := fileMeta.createNewTable(defaultCompactionTableSize)
 				if err != nil {
 					return err
 				}
-				compaction.tableBuilder = builder
+				compaction.tableWriter = builder
 			}
 
-			compaction.tableBuilder.appendKV(ikey, iter.value())
-			if compaction.tableBuilder.fileSize() >= defaultCompactionTableSize {
-				cErr := fileMeta.finishCompactionOutputFile(compaction.tableBuilder)
+			compaction.tableWriter.appendKV(ikey, iter.value())
+			if compaction.tableWriter.fileSize() >= defaultCompactionTableSize {
+				cErr := fileMeta.finishCompactionOutputFile(compaction.tableWriter)
 				if cErr != nil {
 					return cErr
 				}
@@ -242,7 +245,7 @@ func (c *Compaction) expand() {
 
 }
 
-func (c *Compaction) shouldStopBefore(ikey internalKey) bool {
+func (c *Compaction) shouldStopBefore(ikey InternalKey) bool {
 
 	for i := c.gpi; i < len(c.gp); i++ {
 		if bytes.Compare(ikey, c.gp[i].iMax) > 0 {
@@ -263,7 +266,7 @@ func (c *Compaction) shouldStopBefore(ikey internalKey) bool {
 }
 
 // approximately overlapped key by each level
-func (c *Compaction) isBaseLevelForKey(ikey internalKey) bool {
+func (c *Compaction) isBaseLevelForKey(ikey InternalKey) bool {
 
 	/**
 									 |
@@ -293,7 +296,7 @@ func (c *Compaction) isBaseLevelForKey(ikey internalKey) bool {
 
 }
 
-func (s sFiles) getRange() (imin internalKey, imax internalKey) {
+func (s sFiles) getRange() (imin InternalKey, imax InternalKey) {
 
 	for i, sFile := range s {
 		if i == 0 {

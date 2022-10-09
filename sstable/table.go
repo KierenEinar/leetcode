@@ -9,42 +9,52 @@ import (
 
 const kMaxSequenceNum = (uint64(1) << 56) - 1
 
-type internalKey []byte
+const kMaxNum = kMaxSequenceNum | uint64(keyTypeValue)
 
-type compressionType uint8
-
-const (
-	compressionTypeNone   compressionType = 0
-	compressionTypeSnappy compressionType = 1
+var (
+	kMaxNumBytes = make([]byte, 8)
 )
 
-func (ik internalKey) assert() {
+func init() {
+	binary.PutUvarint(kMaxNumBytes, kMaxNum)
+}
+
+type InternalKey []byte
+
+type CompressionType uint8
+
+const (
+	compressionTypeNone   CompressionType = 0
+	compressionTypeSnappy CompressionType = 1
+)
+
+func (ik InternalKey) assert() {
 	if len(ik) < 8 {
 		panic("invalid internal key")
 	}
 }
 
-func (ik internalKey) ukey() []byte {
+func (ik InternalKey) ukey() []byte {
 	ik.assert()
 	dst := make([]byte, len(ik)-8)
 	copy(dst, ik[:len(ik)-8])
 	return dst
 }
 
-func (ik internalKey) seq() uint64 {
+func (ik InternalKey) seq() uint64 {
 	ik.assert()
 	x := binary.LittleEndian.Uint64(ik[len(ik)-8:])
 	return x >> 8
 }
 
-func (ik internalKey) keyType() keyType {
+func (ik InternalKey) keyType() keyType {
 	ik.assert()
 	x := binary.LittleEndian.Uint64(ik[len(ik)-8:])
 	kt := uint8(x & 1 << 7)
 	return keyType(kt)
 }
 
-func parseInternalKey(ikey internalKey) (ukey []byte, kt keyType, seq uint64, err error) {
+func parseInternalKey(ikey InternalKey) (ukey []byte, kt keyType, seq uint64, err error) {
 	if len(ikey) < 8 {
 		err = errors.New("invalid internal ikey len")
 		return
@@ -68,8 +78,8 @@ const (
 )
 
 type SortedFile struct {
-	iMax internalKey
-	iMin internalKey
+	iMax InternalKey
+	iMin InternalKey
 	Size int
 }
 
@@ -88,12 +98,12 @@ type FileMeta struct {
 	NextSequence uint64
 	Levels       Levels
 	NextFileNum  uint64
-	CompactPtrs  []internalKey // 合并的指针
+	CompactPtrs  []InternalKey // 合并的指针
 	BestCScore   float64       // 最佳合并层的分数
 	BestCLevel   int           // 最佳合并层的
 }
 
-func (fileMeta *FileMeta) loadCompactPtr(level int) internalKey {
+func (fileMeta *FileMeta) loadCompactPtr(level int) InternalKey {
 	if level < len(fileMeta.CompactPtrs) {
 		return nil
 	}
@@ -105,7 +115,7 @@ func (s SortedFile) isOverlapped(umin []byte, umax []byte) bool {
 	return !(bytes.Compare(smax, umin) < 0) && !(bytes.Compare(smin, umax) > 0)
 }
 
-func (s sFiles) getOverlapped(imin internalKey, imax internalKey, overlapped bool) (dst sFiles) {
+func (s sFiles) getOverlapped(imin InternalKey, imax InternalKey, overlapped bool) (dst sFiles) {
 
 	if !overlapped {
 
@@ -184,6 +194,6 @@ func (fileMeta *FileMeta) makeInputMergedIterator() iterator {
 }
 
 // todo finish it
-func (fileMeta *FileMeta) createNewTable(fileSize int) (*tableBuilder, error) {
+func (fileMeta *FileMeta) createNewTable(fileSize int) (*tableWriter, error) {
 	return nil, nil
 }

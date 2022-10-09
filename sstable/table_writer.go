@@ -3,6 +3,8 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"hash/crc32"
 )
 
 /**
@@ -100,14 +102,14 @@ footer
 type blockWriter struct {
 	scratch          []byte
 	data             bytes.Buffer
-	prevIKey         internalKey
+	prevIKey         InternalKey
 	entries          int
 	restarts         []int
 	restartThreshold int
 	offset           int
 }
 
-func (bw *blockWriter) append(ikey internalKey, value []byte) {
+func (bw *blockWriter) append(ikey InternalKey, value []byte) {
 
 	if bw.entries%bw.restartThreshold == 0 {
 		bw.prevIKey = append([]byte(nil))
@@ -144,7 +146,7 @@ func (bw *blockWriter) bytesLen() int {
 	return bw.data.Len() + restartsLen*4 + 4
 }
 
-func (bw *blockWriter) writeEntry(ikey internalKey, value []byte) {
+func (bw *blockWriter) writeEntry(ikey InternalKey, value []byte) {
 
 	var (
 		shareUKey     = getPrefixKey(bw.prevIKey, ikey)
@@ -171,20 +173,199 @@ func (bw *blockWriter) writeEntry(ikey internalKey, value []byte) {
 
 }
 
-type tableBuilder struct {
+func (bw *blockWriter) reset() {
+	bw.data.Reset()
+	bw.prevIKey = nil
+	bw.offset = 0
+	bw.restarts = bw.restarts[:0]
+	bw.entries = 0
+}
+
+type FilterWriter struct {
+	data            bytes.Buffer
+	offsets         []int
+	nkeys           int
+	baseLg          int
+	filterGenerator IFilterGenerator
+	numBitsPerKey   uint8
+}
+
+func (fw *FilterWriter) addKey(ikey InternalKey) {
+	fw.filterGenerator.AddKey(ikey.ukey())
+	fw.nkeys++
+}
+
+type blockHandle struct {
+	offset uint64
+	length uint64
+}
+
+func (bh *blockHandle) writeEntry(dest []byte) []byte {
+	dest = ensureBuffer(dest, binary.MaxVarintLen64*2)
+	n1 := binary.PutUvarint(dest, bh.offset)
+	n2 := binary.PutUvarint(dest[n1:], bh.length)
+	return dest[:n1+n2]
+}
+
+type TableWriter struct {
+	writer     Writer
+	dataBlock  *blockWriter
+	indexBlock *blockWriter
+
+	filterBlock *FilterWriter
+
+	blockHandle *blockHandle
+	prevKey     InternalKey
+	offset      int
+	entries     int
+
+	scratch [50]byte // tail 20 bytes used to encode block handle
+}
+
+func (tableWriter *TableWriter) Append(ikey InternalKey, value []byte) error {
+
+	dataBlock := tableWriter.dataBlock
+	filterBlock := tableWriter.filterBlock
+
+	if tableWriter.entries > 0 && bytes.Compare(dataBlock.prevIKey, ikey) > 0 {
+		return errors.New("tableWriter Append ikey not sorted")
+	}
+
+	err := tableWriter.flushPendingBH(ikey)
+	if err != nil {
+		return err
+	}
+
+	dataBlock.append(ikey, value)
+
+	filterBlock.addKey(ikey)
+
+	if dataBlock.bytesLen() >= defaultDataBlockSize {
+		bh, ferr := tableWriter.finishBlock(dataBlock)
+		if ferr != nil {
+			return ferr
+		}
+		tableWriter.blockHandle = bh
+	}
+
+	return nil
+}
+
+func (tableWriter *TableWriter) finishBlock(blockWriter *blockWriter) (*blockHandle, error) {
+
+	w := tableWriter.writer
+
+	offset := tableWriter.offset
+	length := blockWriter.bytesLen()
+
+	bh := &blockHandle{
+		offset: uint64(offset),
+		length: uint64(length),
+	}
+
+	blockWriter.finish()
+	blockTail := make([]byte, 5)
+	checkSum := crc32.ChecksumIEEE(blockWriter.data.Bytes())
+	compressionType := compressionTypeNone
+	binary.LittleEndian.PutUint32(blockTail, checkSum)
+	blockTail[4] = byte(compressionType)
+
+	n, _ := blockWriter.data.Write(blockTail)
+
+	_, err := w.Write(blockWriter.data.Bytes())
+	if err != nil {
+		return nil, err
+	}
+
+	tableWriter.offset += n
+	blockWriter.reset()
+
+	filterWriter := tableWriter.filterBlock
+	err = filterWriter.flush(tableWriter.offset)
+	if err != nil {
+		return nil, err
+	}
+
+	return bh, nil
+}
+
+func (tableWriter *TableWriter) flushPendingBH(ikey InternalKey) error {
+
+	if tableWriter.blockHandle == nil {
+		return nil
+	}
+	var separator []byte
+	if len(ikey) == 0 {
+		separator = iSuccessor(tableWriter.prevKey)
+	} else {
+		separator = iSeparator(tableWriter.prevKey, ikey)
+	}
+	indexBlock := tableWriter.indexBlock
+	bhEntry := tableWriter.blockHandle.writeEntry(tableWriter.scratch[30:])
+	indexBlock.append(separator, bhEntry)
+	tableWriter.blockHandle = nil
+	return nil
 }
 
 // todo finish it
-func (tableBuilder *tableBuilder) appendKV(ikey internalKey, value []byte) {
-
-}
-
-// todo finish it
-func (tableBuilder *tableBuilder) fileSize() int {
+func (tableWriter *TableWriter) fileSize() int {
 	return 0
 }
 
-func getPrefixKey(prevIKey, ikey internalKey) []byte {
+func iSuccessor(a InternalKey) (dest InternalKey) {
+	au := a.ukey()
+	destU := getSuccessor(au)
+	dest = append(destU, kMaxNumBytes...)
+	return
+}
+
+func iSeparator(a, b InternalKey) (dest InternalKey) {
+	au, bu := a.ukey(), b.ukey()
+	destU := getSeparator(au, bu)
+	dest = append(destU, kMaxNumBytes...)
+	return
+}
+
+// return the successor that Gte ikey
+// e.g. abc => b
+// e.g. 0xff 0xff abc => 0xff 0xff b
+func getSuccessor(a []byte) (dest []byte) {
+	for i := range a {
+		c := a[i]
+		if c < 0xff {
+			dest = append(dest, a[:i+1]...)
+			dest[len(dest)-1]++
+			return
+		}
+	}
+	dest = append(dest, a...)
+	return
+}
+
+// return x that is gte a and lt b
+func getSeparator(a, b []byte) (dest []byte) {
+	i, n := 0, len(a)
+	if n > len(b) {
+		n = len(b)
+	}
+
+	for ; i < n && a[i] == b[i]; i++ {
+
+	}
+
+	if i == n {
+
+	} else if c := a[i]; c < 0xff && c+1 < b[i] {
+		dest = append(dest, a[:i+1]...)
+		dest[len(dest)-1]++
+		return
+	}
+
+	dest = append(dest, a...)
+	return
+}
+
+func getPrefixKey(prevIKey, ikey InternalKey) []byte {
 
 	prevUkey := prevIKey.ukey()
 	uKey := ikey.ukey()
