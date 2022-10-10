@@ -59,24 +59,19 @@ meta block (each data block's would be in offset [k, k+1]  )
 	/----------/----------/----------/----------/-----/-----/-----/-----/-----/----/
 
 e.g.
-      data block0     data block1            data block2
-	|------------|---------------|------------------------------------------|
-	/---------------------/----------------------/------------------------/
-	       baselg
+   	data block.. 			0      1      2               	  3                    		4
+					    /------/------/------/----------------------------------/----------------/
 
-	of0		   of1        data offset's offset
-	/----------/----------/-----/-----/-----/-----/----/
-	| filter 0 | filter 1 | of0 | of1 |	of2 | dof | lg |
-	/----------/----------/-----/-----/-----/-----/----/
+	filter partition...
+						/---------------/----------------/---------------/----------------/--------------/
 
-	of0 -> of0 pos
-    of1 -> of1 pos
-	of2 -> of1 pos
+	filter data...             filter 0                      filter 1               filter 2
+					   /--------------------/----------------------------------/----------------/
+	filter offset 	   0                  2500							     7000              9000
+						  0      1     2      3 	 4(offset's offset)
+					  /------/------/------/------/------/
+	value				 0     2500   7000   7000   9000
 
-
-	data0 [offset0, offset1]
-	data1 [offset0, offset1]
-	data2 [offset1, offset2]
 meta index block
 
 	/---------------------/------------------------/
@@ -195,6 +190,38 @@ func (fw *FilterWriter) addKey(ikey InternalKey) {
 	fw.nkeys++
 }
 
+func (fw *FilterWriter) flush(offset int) {
+
+	/**
+	data block.. 			0      1      2               	  3                    		4
+					    /------/------/------/----------------------------------/----------------/
+
+	filter partition...
+						/---------------/----------------/---------------/----------------/--------------/
+
+	filter data...             filter 0                      filter 1               filter 2
+					   /--------------------/----------------------------------/----------------/
+	filter offset 	   0                  2500							     7000              9000
+						  0      1     2      3 	 4(offset's offset)
+					  /------/------/------/------/------/
+	value				 0     2500   7000   7000   9000
+		**/
+
+	for c := offset / (1 << fw.baseLg); c > len(fw.offsets); {
+		fw.generate()
+	}
+
+}
+
+func (fw *FilterWriter) generate() {
+	// don't forget to insert offset 0 pos into head in final finish
+	if fw.nkeys > 0 {
+		fw.filterGenerator.Generate(&fw.data)
+		fw.nkeys = 0
+	}
+	fw.offsets = append(fw.offsets, fw.data.Len())
+}
+
 type blockHandle struct {
 	offset uint64
 	length uint64
@@ -208,10 +235,10 @@ func (bh *blockHandle) writeEntry(dest []byte) []byte {
 }
 
 type TableWriter struct {
-	writer     Writer
-	dataBlock  *blockWriter
-	indexBlock *blockWriter
-
+	writer      Writer
+	dataBlock   *blockWriter
+	indexBlock  *blockWriter
+	metaBlock   *blockWriter
 	filterBlock *FilterWriter
 
 	blockHandle *blockHandle
@@ -241,51 +268,123 @@ func (tableWriter *TableWriter) Append(ikey InternalKey, value []byte) error {
 	filterBlock.addKey(ikey)
 
 	if dataBlock.bytesLen() >= defaultDataBlockSize {
-		bh, ferr := tableWriter.finishBlock(dataBlock)
+		ferr := tableWriter.finishDataBlock()
 		if ferr != nil {
 			return ferr
 		}
-		tableWriter.blockHandle = bh
 	}
 
 	return nil
 }
 
-func (tableWriter *TableWriter) finishBlock(blockWriter *blockWriter) (*blockHandle, error) {
+// Close current sstable
+func (tableWriter *TableWriter) Close() error {
 
-	w := tableWriter.writer
+	dataBlock := tableWriter.dataBlock
 
-	offset := tableWriter.offset
-	length := blockWriter.bytesLen()
-
-	bh := &blockHandle{
-		offset: uint64(offset),
-		length: uint64(length),
+	// finish all data block
+	if len(dataBlock.prevIKey) > 0 {
+		err := tableWriter.finishDataBlock()
+		if err != nil {
+			return err
+		}
 	}
 
-	blockWriter.finish()
+	// flush indexed block
+	err := tableWriter.flushPendingBH(nil)
+	if err != nil {
+		return err
+	}
+
+	// flush filter
+	bh, err := tableWriter.finishFilterBlock()
+	if err != nil {
+		return err
+	}
+
+	// flush meta block
+	metaBlock := tableWriter.metaBlock
+	metaBlock.append([]byte("filter.bloomFilter"), bh.writeEntry(nil))
+	metaBH, err := tableWriter.writeBlock(&metaBlock.data, compressionTypeNone)
+	if err != nil {
+		return err
+	}
+
+	// flush index block
+	indexBlock := tableWriter.indexBlock
+	indexBH, err := tableWriter.writeBlock(&indexBlock.data, compressionTypeNone)
+	if err != nil {
+		return err
+	}
+
+	// flush footer
+	err = tableWriter.flushFooter(indexBH, metaBH)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (tableWriter *TableWriter) finishDataBlock() error {
+
+	bh, err := tableWriter.writeBlock(&tableWriter.dataBlock.data, compressionTypeNone)
+	if err != nil {
+		return err
+	}
+	tableWriter.blockHandle = bh
+	tableWriter.dataBlock.reset()
+	filterWriter := tableWriter.filterBlock
+	filterWriter.flush(tableWriter.offset)
+	return nil
+}
+
+func (tableWriter *TableWriter) finishFilterBlock() (*blockHandle, error) {
+
+	filterWriter := tableWriter.filterBlock
+	filterWriter.generate()
+	filterWriter.offsets = append([]int{0}, filterWriter.offsets...)
+	offsetBuf := make([]byte, 4)
+	for _, offset := range filterWriter.offsets {
+		binary.LittleEndian.PutUint32(offsetBuf, uint32(offset))
+		filterWriter.data.Write(offsetBuf)
+	}
+	bh, err := tableWriter.writeBlock(&filterWriter.data, compressionTypeNone)
+	if err != nil {
+		return nil, err
+	}
+	return bh, nil
+}
+
+func (tableWriter *TableWriter) writeBlock(buf *bytes.Buffer, compressionType CompressionType) (*blockHandle, error) {
+
+	w := tableWriter.writer
+	offset := tableWriter.offset
+	length := buf.Len()
+
 	blockTail := make([]byte, 5)
-	checkSum := crc32.ChecksumIEEE(blockWriter.data.Bytes())
-	compressionType := compressionTypeNone
+	checkSum := crc32.ChecksumIEEE(buf.Bytes())
+
 	binary.LittleEndian.PutUint32(blockTail, checkSum)
 	blockTail[4] = byte(compressionType)
 
-	n, _ := blockWriter.data.Write(blockTail)
+	buf.Write(blockTail)
 
-	_, err := w.Write(blockWriter.data.Bytes())
+	n, err := w.Write(buf.Bytes())
+	if err != nil {
+		return nil, err
+	}
+
+	err = w.Sync()
 	if err != nil {
 		return nil, err
 	}
 
 	tableWriter.offset += n
-	blockWriter.reset()
 
-	filterWriter := tableWriter.filterBlock
-	err = filterWriter.flush(tableWriter.offset)
-	if err != nil {
-		return nil, err
+	bh := &blockHandle{
+		offset: uint64(offset),
+		length: uint64(length),
 	}
-
 	return bh, nil
 }
 
@@ -304,6 +403,24 @@ func (tableWriter *TableWriter) flushPendingBH(ikey InternalKey) error {
 	bhEntry := tableWriter.blockHandle.writeEntry(tableWriter.scratch[30:])
 	indexBlock.append(separator, bhEntry)
 	tableWriter.blockHandle = nil
+	return nil
+}
+
+func (tableWriter *TableWriter) flushFooter(indexBH, metaBH *blockHandle) error {
+	footer := make([]byte, 48)
+	n1 := copy(footer, indexBH.writeEntry(nil))
+	_ = copy(footer[n1:], metaBH.writeEntry(nil))
+	copy(footer[40:], magic)
+	w := tableWriter.writer
+	_, err := w.Write(footer)
+	if err != nil {
+		return err
+	}
+
+	err = w.Sync()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

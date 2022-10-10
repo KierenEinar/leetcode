@@ -16,7 +16,7 @@ type IFilter interface {
 
 type IFilterGenerator interface {
 	AddKey(key []byte)
-	Generate(b bytes.Buffer)
+	Generate(b *bytes.Buffer)
 }
 
 type BloomFilterGenerator struct {
@@ -61,7 +61,7 @@ func (bf *BloomFilterGenerator) AddKey(key []byte) {
 	bf.keysHash = append(bf.keysHash, hash32(key))
 }
 
-func (bf *BloomFilterGenerator) Generate(b bytes.Buffer) {
+func (bf *BloomFilterGenerator) Generate(b *bytes.Buffer) {
 	n := len(bf.keysHash)
 
 	numBits := n * int(bf.numBitsPerKey)
@@ -90,6 +90,8 @@ func (bf *BloomFilterGenerator) Generate(b bytes.Buffer) {
 
 	numBytes += 1 // 1byte represent k (hash function number)
 	b.WriteByte(bf.k)
+
+	bf.keysHash = bf.keysHash[:0]
 
 }
 
