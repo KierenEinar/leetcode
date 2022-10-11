@@ -9,6 +9,12 @@ type Writer interface {
 	Syncer
 }
 
+type Reader interface {
+	io.Reader
+	io.ReaderAt
+	io.Closer
+}
+
 type Syncer interface {
 	Sync() error
 }

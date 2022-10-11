@@ -3,24 +3,25 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"hash/crc32"
 	"sort"
 	"sync/atomic"
 )
 
-type blockData struct {
+type dataBlock struct {
 	data               []byte
 	restartPointOffset int
 	restartPointNums   int
 }
 
-func newBlockData(data []byte) (*blockData, error) {
+func newDataBlock(data []byte) (*dataBlock, error) {
 	dataLen := len(data)
 	if dataLen < 4 {
 		return nil, NewErrCorruption("block data corruption")
 	}
 	restartPointNums := int(binary.LittleEndian.Uint32(data[len(data)-4:]))
 	restartPointOffset := len(data) - (restartPointNums+1)*4
-	return &blockData{
+	return &dataBlock{
 		data:               data,
 		restartPointNums:   restartPointNums,
 		restartPointOffset: restartPointOffset,
@@ -47,7 +48,7 @@ func (a InternalKey) compare(b InternalKey) int {
 	}
 }
 
-func (br *blockData) entry(offset int) (entryLen, shareKeyLen int, unShareKey, value []byte, err error) {
+func (br *dataBlock) entry(offset int) (entryLen, shareKeyLen int, unShareKey, value []byte, err error) {
 	if offset >= br.restartPointOffset {
 		err = ErrIterOutOfBounds
 		return
@@ -64,7 +65,7 @@ func (br *blockData) entry(offset int) (entryLen, shareKeyLen int, unShareKey, v
 	return
 }
 
-func (br *blockData) readRestartPoint(restartPoint int) (unShareKey InternalKey) {
+func (br *dataBlock) readRestartPoint(restartPoint int) (unShareKey InternalKey) {
 	_, n := binary.Uvarint(br.data[restartPoint:])
 	unShareKeyLen, m := binary.Uvarint(br.data[restartPoint+n:])
 	_, k := binary.Uvarint(br.data[restartPoint+n+m:])
@@ -72,7 +73,7 @@ func (br *blockData) readRestartPoint(restartPoint int) (unShareKey InternalKey)
 	return
 }
 
-func (br *blockData) SeekRestartPoint(key InternalKey) int {
+func (br *dataBlock) SeekRestartPoint(key InternalKey) int {
 
 	n := sort.Search(br.restartPointNums, func(i int) bool {
 		restartPoint := binary.LittleEndian.Uint32(br.data[br.restartPointOffset : br.restartPointOffset+i*4])
@@ -88,7 +89,7 @@ func (br *blockData) SeekRestartPoint(key InternalKey) int {
 	return n - 1
 }
 
-func (br *blockData) Close() {
+func (br *dataBlock) Close() {
 	br.data = br.data[:0]
 	br.data = nil
 	br.restartPointNums = 0
@@ -96,7 +97,7 @@ func (br *blockData) Close() {
 }
 
 type blockIter struct {
-	*blockData
+	*dataBlock
 	ref     int32
 	offset  int
 	prevKey []byte
@@ -126,7 +127,7 @@ func (bi *blockIter) Close() {
 func (bi *blockIter) UnRef() int32 {
 	newInt32 := atomic.AddInt32(&bi.ref, -1)
 	if newInt32 == 0 {
-		bi.blockData.Close()
+		bi.dataBlock.Close()
 		bi.Close()
 	}
 	if newInt32 < 0 {
@@ -161,7 +162,7 @@ func (bi *blockIter) Seek(key InternalKey) bool {
 
 func (bi *blockIter) Next() bool {
 
-	if bi.offset >= bi.blockData.restartPointOffset {
+	if bi.offset >= bi.dataBlock.restartPointOffset {
 		bi.dir = dirEOI
 		return false
 	}
@@ -199,4 +200,44 @@ func (bi *blockIter) Value() []byte {
 }
 
 type tableReader struct {
+	r           Reader
+	metaBlock   *metaBlock
+	indexBlock  *dataBlock
+	indexBH     blockHandle
+	metaIndexBH blockHandle
+}
+
+// todo used cache
+func (tableReader *tableReader) readRawBlock(bh blockHandle) (*dataBlock, error) {
+	r := tableReader.r
+
+	data := make([]byte, bh.length+blockTailLen)
+
+	n, err := r.ReadAt(data, int64(bh.offset))
+	if err != nil {
+		return nil, err
+	}
+
+	rawData := data[:n-5]
+	checkSum := binary.LittleEndian.Uint32(data[n-5 : n-1])
+	compressionType := CompressionType(data[n-1])
+
+	if crc32.ChecksumIEEE(rawData) != checkSum {
+		return nil, NewErrCorruption("checksum failed")
+	}
+
+	switch compressionType {
+	case compressionTypeNone:
+	default:
+		return nil, ErrUnSupportCompressionType
+	}
+
+	block, err := newDataBlock(data[:n])
+	if err != nil {
+		return nil, err
+	}
+	return block, nil
+}
+
+type metaBlock struct {
 }

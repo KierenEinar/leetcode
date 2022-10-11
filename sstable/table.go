@@ -13,6 +13,8 @@ const kMaxNum = kMaxSequenceNum | uint64(keyTypeValue)
 
 const magic = "\x57\xfb\x80\x8b\x24\x75\x47\xdb"
 
+const blockTailLen = 5
+
 var (
 	kMaxNumBytes = make([]byte, 8)
 )
