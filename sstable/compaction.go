@@ -32,41 +32,6 @@ func ensureBuffer(dst []byte, size int) []byte {
 	return dst[:size]
 }
 
-type iterator interface {
-	seek(key InternalKey) bool
-	first() bool
-	next() bool
-	key() InternalKey
-	value() []byte
-}
-
-type iteratorIndexer interface {
-	iterator
-	Get() iterator
-}
-
-type emptyIterator struct{}
-
-func (ei *emptyIterator) seek(key InternalKey) bool {
-	return false
-}
-
-func (ei *emptyIterator) first() bool {
-	return false
-}
-
-func (ei *emptyIterator) next() bool {
-	return false
-}
-
-func (ei *emptyIterator) key() InternalKey {
-	return nil
-}
-
-func (ei *emptyIterator) value() []byte {
-	return nil
-}
-
 type Compaction struct {
 	inputLevel  int
 	cPtr        InternalKey

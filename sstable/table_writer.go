@@ -107,7 +107,7 @@ type blockWriter struct {
 func (bw *blockWriter) append(ikey InternalKey, value []byte) {
 
 	if bw.entries%bw.restartThreshold == 0 {
-		bw.prevIKey = append([]byte(nil))
+		bw.prevIKey = bw.prevIKey[:0]
 		bw.restarts = append(bw.restarts, bw.offset)
 	}
 
