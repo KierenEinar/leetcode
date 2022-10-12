@@ -1,5 +1,7 @@
 package sstable
 
+import "sync/atomic"
+
 type iterator interface {
 	Releaser
 	Seek(key InternalKey) bool
@@ -52,4 +54,34 @@ func (ei *emptyIterator) Valid() error {
 type Releaser interface {
 	Ref() int32
 	UnRef() int32
+}
+
+type BasicReleaser struct {
+	ref     int32
+	OnClose func()
+	OnRef   func()
+	OnUnRef func()
+}
+
+func (br *BasicReleaser) Ref() int32 {
+	if br.OnRef != nil {
+		br.OnRef()
+	}
+	return atomic.AddInt32(&br.ref, 1)
+}
+
+func (br *BasicReleaser) UnRef() int32 {
+	newInt32 := atomic.AddInt32(&br.ref, -1)
+	if newInt32 < 0 {
+		panic("duplicated UnRef")
+	}
+	if br.OnUnRef != nil {
+		br.OnUnRef()
+	}
+	if newInt32 == 0 {
+		if br.OnClose != nil {
+			br.OnClose()
+		}
+	}
+	return newInt32
 }

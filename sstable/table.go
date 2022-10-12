@@ -8,12 +8,12 @@ import (
 )
 
 const kMaxSequenceNum = (uint64(1) << 56) - 1
-
 const kMaxNum = kMaxSequenceNum | uint64(keyTypeValue)
 
-const magic = "\x57\xfb\x80\x8b\x24\x75\x47\xdb"
+var magicByte = []byte("\x57\xfb\x80\x8b\x24\x75\x47\xdb")
 
 const blockTailLen = 5
+const tableFooterLen = 48
 
 var (
 	kMaxNumBytes = make([]byte, 8)

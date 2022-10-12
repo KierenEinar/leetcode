@@ -5,10 +5,10 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"sort"
-	"sync/atomic"
 )
 
 type dataBlock struct {
+	*BasicReleaser
 	data               []byte
 	restartPointOffset int
 	restartPointNums   int
@@ -21,11 +21,13 @@ func newDataBlock(data []byte) (*dataBlock, error) {
 	}
 	restartPointNums := int(binary.LittleEndian.Uint32(data[len(data)-4:]))
 	restartPointOffset := len(data) - (restartPointNums+1)*4
-	return &dataBlock{
+	block := &dataBlock{
 		data:               data,
 		restartPointNums:   restartPointNums,
 		restartPointOffset: restartPointOffset,
-	}, nil
+	}
+	block.OnClose = block.Close
+	return block, nil
 }
 
 func (a InternalKey) compare(b InternalKey) int {
@@ -98,6 +100,7 @@ func (br *dataBlock) Close() {
 
 type blockIter struct {
 	*dataBlock
+	*BasicReleaser
 	ref     int32
 	offset  int
 	prevKey []byte
@@ -105,6 +108,24 @@ type blockIter struct {
 	err     error
 	ikey    []byte
 	value   []byte
+}
+
+func newBlockIter(dataBlock *dataBlock) *blockIter {
+	bi := &blockIter{
+		dataBlock: dataBlock,
+	}
+	br := &BasicReleaser{
+		OnRef: func() {
+			dataBlock.Ref()
+		},
+		OnUnRef: func() {
+			dataBlock.UnRef()
+		},
+		OnClose: bi.Close,
+	}
+	bi.BasicReleaser = br
+	bi.Ref()
+	return bi
 }
 
 type direction int
@@ -115,25 +136,9 @@ const (
 	dirEOI     direction = 3
 )
 
-func (bi *blockIter) Ref() int32 {
-	return atomic.AddInt32(&bi.ref, 1)
-}
-
 func (bi *blockIter) Close() {
 	bi.prevKey = nil
 	bi.offset = 0
-}
-
-func (bi *blockIter) UnRef() int32 {
-	newInt32 := atomic.AddInt32(&bi.ref, -1)
-	if newInt32 == 0 {
-		bi.dataBlock.Close()
-		bi.Close()
-	}
-	if newInt32 < 0 {
-		panic("duplicated UnRef")
-	}
-	return newInt32
 }
 
 func (bi *blockIter) SeekFirst() bool {
@@ -201,10 +206,47 @@ func (bi *blockIter) Value() []byte {
 
 type tableReader struct {
 	r           Reader
+	tableSize   int
 	metaBlock   *metaBlock
 	indexBlock  *dataBlock
 	indexBH     blockHandle
 	metaIndexBH blockHandle
+}
+
+func newTableReader(r Reader, fileSize int) (*tableReader, error) {
+	footer := make([]byte, tableFooterLen)
+	_, err := r.ReadAt(footer, int64(fileSize-tableFooterLen))
+	if err != nil {
+		return nil, err
+	}
+	tr := &tableReader{
+		r:         r,
+		tableSize: fileSize,
+	}
+	err = tr.readFooter()
+	if err != nil {
+		return nil, err
+	}
+	return tr, nil
+}
+
+func (tableReader *tableReader) readFooter() error {
+	footer := make([]byte, tableFooterLen)
+	_, err := tableReader.r.ReadAt(footer, int64(tableReader.tableSize-tableFooterLen))
+	if err != nil {
+		return err
+	}
+
+	magic := footer[40:]
+	if bytes.Compare(magic, magicByte) != 0 {
+		return NewErrCorruption("footer decode failed")
+	}
+
+	bhLen, indexBH := readBH(footer)
+	tableReader.indexBH = indexBH
+
+	_, tableReader.metaIndexBH = readBH(footer[bhLen:])
+	return nil
 }
 
 // todo used cache
@@ -237,6 +279,80 @@ func (tableReader *tableReader) readRawBlock(bh blockHandle) (*dataBlock, error)
 		return nil, err
 	}
 	return block, nil
+}
+
+func (tr *tableReader) getIndexBlock() (*dataBlock, error) {
+	if tr.indexBlock != nil {
+		return tr.indexBlock, nil
+	}
+	b, err := tr.readRawBlock(tr.indexBH)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+type dataIter struct {
+	*tableReader
+	indexIter *blockIter
+
+	err error
+}
+
+// Seek return gte key
+func (dataIter *dataIter) Seek(key InternalKey) bool {
+	indexBlock, err := dataIter.getIndexBlock()
+	if err != nil {
+		dataIter.err = err
+		return false
+	}
+
+	indexBlockIter := newBlockIter(indexBlock)
+	defer indexBlockIter.UnRef()
+
+	if !indexBlockIter.Seek(key) {
+		return false
+	}
+
+	_, blockHandle := readBH(indexBlockIter.Value())
+
+	dataBlock, err := dataIter.readRawBlock(blockHandle)
+	if err != nil {
+		dataIter.err = err
+		return false
+	}
+	dataBlockIter := newBlockIter(dataBlock)
+	defer dataBlockIter.UnRef()
+
+	ok := dataBlockIter.Seek(key)
+	if ok {
+		return true
+	}
+
+	/**
+	special case
+	0..block last  abcd
+	1..block first abcz
+	so the index block key is abce
+	if search abce, so block..0 won't exist abce, should go to the next block
+	*/
+
+	if !indexBlockIter.Next() {
+		return false
+	}
+
+	_, blockHandle1 := readBH(indexBlockIter.Value())
+
+	dataBlock1, err := dataIter.readRawBlock(blockHandle1)
+	if err != nil {
+		dataIter.err = err
+		return false
+	}
+
+	dataBlockIter1 := newBlockIter(dataBlock1)
+	defer dataBlockIter1.UnRef()
+
+	return dataBlockIter1.Seek(key)
 }
 
 type metaBlock struct {

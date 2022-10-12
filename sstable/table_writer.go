@@ -227,11 +227,20 @@ type blockHandle struct {
 	length uint64
 }
 
-func (bh *blockHandle) writeEntry(dest []byte) []byte {
+func writeBH(dest []byte, bh blockHandle) []byte {
 	dest = ensureBuffer(dest, binary.MaxVarintLen64*2)
 	n1 := binary.PutUvarint(dest, bh.offset)
 	n2 := binary.PutUvarint(dest[n1:], bh.length)
 	return dest[:n1+n2]
+}
+
+func readBH(buf []byte) (bhLen int, bh blockHandle) {
+	offset, n := binary.Uvarint(buf)
+	length, m := binary.Uvarint(buf[n:])
+	bhLen = n + m
+	bh.offset = offset
+	bh.length = length
+	return
 }
 
 type TableWriter struct {
@@ -304,7 +313,7 @@ func (tableWriter *TableWriter) Close() error {
 
 	// flush meta block
 	metaBlock := tableWriter.metaBlock
-	metaBlock.append([]byte("filter.bloomFilter"), bh.writeEntry(nil))
+	metaBlock.append([]byte("filter.bloomFilter"), writeBH(nil, *bh))
 	metaBH, err := tableWriter.writeBlock(&metaBlock.data, compressionTypeNone)
 	if err != nil {
 		return err
@@ -318,7 +327,7 @@ func (tableWriter *TableWriter) Close() error {
 	}
 
 	// flush footer
-	err = tableWriter.flushFooter(indexBH, metaBH)
+	err = tableWriter.flushFooter(*indexBH, *metaBH)
 	if err != nil {
 		return err
 	}
@@ -400,17 +409,17 @@ func (tableWriter *TableWriter) flushPendingBH(ikey InternalKey) error {
 		separator = iSeparator(tableWriter.prevKey, ikey)
 	}
 	indexBlock := tableWriter.indexBlock
-	bhEntry := tableWriter.blockHandle.writeEntry(tableWriter.scratch[30:])
+	bhEntry := writeBH(tableWriter.scratch[30:], *tableWriter.blockHandle)
 	indexBlock.append(separator, bhEntry)
 	tableWriter.blockHandle = nil
 	return nil
 }
 
-func (tableWriter *TableWriter) flushFooter(indexBH, metaBH *blockHandle) error {
+func (tableWriter *TableWriter) flushFooter(indexBH, metaBH blockHandle) error {
 	footer := make([]byte, 48)
-	n1 := copy(footer, indexBH.writeEntry(nil))
-	_ = copy(footer[n1:], metaBH.writeEntry(nil))
-	copy(footer[40:], magic)
+	n1 := copy(footer, writeBH(nil, indexBH))
+	_ = copy(footer[n1:], writeBH(nil, metaBH))
+	copy(footer[40:], magicByte)
 	w := tableWriter.writer
 	_, err := w.Write(footer)
 	if err != nil {
