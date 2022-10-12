@@ -85,3 +85,20 @@ func (br *BasicReleaser) UnRef() int32 {
 	}
 	return newInt32
 }
+
+type indexedIterator struct {
+	indexed iteratorIndexer
+	data    iterator
+	err     error
+	ikey    InternalKey
+	value   []byte
+}
+
+func (iter *indexedIterator) clearData() {
+	iter.ikey = iter.ikey[:0]
+	iter.value = iter.value[:0]
+}
+
+func (iter *indexedIterator) Next() bool {
+
+}

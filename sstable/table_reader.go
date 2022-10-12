@@ -27,6 +27,7 @@ func newDataBlock(data []byte) (*dataBlock, error) {
 		restartPointOffset: restartPointOffset,
 	}
 	block.OnClose = block.Close
+	block.Ref()
 	return block, nil
 }
 
@@ -292,41 +293,37 @@ func (tr *tableReader) getIndexBlock() (*dataBlock, error) {
 	return b, nil
 }
 
-type dataIter struct {
-	*tableReader
-	indexIter *blockIter
-
-	err error
-}
-
 // Seek return gte key
-func (dataIter *dataIter) Seek(key InternalKey) bool {
-	indexBlock, err := dataIter.getIndexBlock()
+func (tr *tableReader) find(key InternalKey) (ikey InternalKey, value []byte, err error) {
+	indexBlock, err := tr.getIndexBlock()
 	if err != nil {
-		dataIter.err = err
-		return false
+		return
 	}
+	defer indexBlock.UnRef()
 
 	indexBlockIter := newBlockIter(indexBlock)
 	defer indexBlockIter.UnRef()
 
 	if !indexBlockIter.Seek(key) {
-		return false
+		err = ErrNotFound
+		return
 	}
 
 	_, blockHandle := readBH(indexBlockIter.Value())
 
-	dataBlock, err := dataIter.readRawBlock(blockHandle)
+	dataBlock, err := tr.readRawBlock(blockHandle)
 	if err != nil {
-		dataIter.err = err
-		return false
+		return
 	}
+	defer dataBlock.UnRef()
+
 	dataBlockIter := newBlockIter(dataBlock)
 	defer dataBlockIter.UnRef()
 
-	ok := dataBlockIter.Seek(key)
-	if ok {
-		return true
+	if dataBlockIter.Seek(key) {
+		ikey = dataBlockIter.Key()
+		value = append([]byte(nil), dataBlockIter.value...)
+		return
 	}
 
 	/**
@@ -338,21 +335,53 @@ func (dataIter *dataIter) Seek(key InternalKey) bool {
 	*/
 
 	if !indexBlockIter.Next() {
-		return false
+		err = ErrNotFound
+		return
 	}
 
 	_, blockHandle1 := readBH(indexBlockIter.Value())
 
-	dataBlock1, err := dataIter.readRawBlock(blockHandle1)
+	dataBlock1, err := tr.readRawBlock(blockHandle1)
 	if err != nil {
-		dataIter.err = err
-		return false
+		return
 	}
+	dataBlock1.UnRef()
 
 	dataBlockIter1 := newBlockIter(dataBlock1)
 	defer dataBlockIter1.UnRef()
 
-	return dataBlockIter1.Seek(key)
+	if !dataBlockIter1.Seek(key) {
+		err = ErrNotFound
+		return
+	}
+
+	ikey = dataBlockIter1.Key()
+	value = append([]byte(nil), dataBlockIter1.Value()...)
+	return
+}
+
+type indexIter struct {
+	*blockIter
+	tr *tableReader
+}
+
+func (indexIter *indexIter) Get() iterator {
+	value := indexIter.Value()
+	if value == nil {
+		return nil
+	}
+
+	_, bh := readBH(value)
+
+	dataBlock, err := indexIter.tr.readRawBlock(bh)
+	if err != nil {
+		indexIter.err = err
+		return nil
+	}
+	defer dataBlock.UnRef()
+
+	return newBlockIter(dataBlock)
+
 }
 
 type metaBlock struct {

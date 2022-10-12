@@ -19,4 +19,5 @@ var (
 	ErrIterOutOfBounds          = errors.New("leveldb/table iterator offset out of bounds")
 	ErrIterInvalidSharedKey     = errors.New("leveldb/table iterator invald shared key")
 	ErrUnSupportCompressionType = errors.New("leveldb/table not support compression type")
+	ErrNotFound                 = errors.New("leveldb err not found")
 )
