@@ -255,6 +255,8 @@ type TableWriter struct {
 	offset      int
 	entries     int
 
+	iFilter IFilter
+
 	scratch [50]byte // tail 20 bytes used to encode block handle
 }
 

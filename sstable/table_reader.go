@@ -116,13 +116,12 @@ func newBlockIter(dataBlock *dataBlock) *blockIter {
 		dataBlock: dataBlock,
 	}
 	br := &BasicReleaser{
-		OnRef: func() {
-			dataBlock.Ref()
-		},
-		OnUnRef: func() {
+		OnClose: func() {
 			dataBlock.UnRef()
+			bi.prevKey = nil
+			bi.ikey = nil
+			bi.value = nil
 		},
-		OnClose: bi.Close,
 	}
 	bi.BasicReleaser = br
 	bi.Ref()
@@ -136,11 +135,6 @@ const (
 	dirForward direction = 2
 	dirEOI     direction = 3
 )
-
-func (bi *blockIter) Close() {
-	bi.prevKey = nil
-	bi.offset = 0
-}
 
 func (bi *blockIter) SeekFirst() bool {
 	bi.dir = dirSOI
@@ -205,33 +199,65 @@ func (bi *blockIter) Value() []byte {
 	return bi.value
 }
 
-type tableReader struct {
+type TableReader struct {
+	*BasicReleaser
 	r           Reader
 	tableSize   int
-	metaBlock   *metaBlock
+	filterBlock *filterBlock
 	indexBlock  *dataBlock
 	indexBH     blockHandle
 	metaIndexBH blockHandle
+	iFilter     IFilter
 }
 
-func newTableReader(r Reader, fileSize int) (*tableReader, error) {
+func NewTableReader(r Reader, fileSize int) (*TableReader, error) {
 	footer := make([]byte, tableFooterLen)
 	_, err := r.ReadAt(footer, int64(fileSize-tableFooterLen))
 	if err != nil {
 		return nil, err
 	}
-	tr := &tableReader{
+	tr := &TableReader{
 		r:         r,
 		tableSize: fileSize,
+		BasicReleaser: &BasicReleaser{
+			OnClose: func() {
+				_ = r.Close()
+			},
+		},
 	}
 	err = tr.readFooter()
 	if err != nil {
 		return nil, err
 	}
+	metaIndexData := make([]byte, tr.metaIndexBH.length)
+	_, err = r.ReadAt(metaIndexData, int64(tr.metaIndexBH.offset))
+	if err != nil {
+		return nil, err
+	}
+
+	metaBlock, err := newDataBlock(metaIndexData)
+	if err != nil {
+		return nil, err
+	}
+	defer metaBlock.UnRef()
+
+	metaIter := newBlockIter(metaBlock)
+	defer metaIter.UnRef()
+
+	for metaIter.Next() {
+		k := metaIter.Key()
+		if len(k) > 0 && bytes.Compare(k, []byte("filter.bloomFilter")) == 0 {
+			_, bh := readBH(metaIter.Value())
+			tr.metaBlock = tr.readMetaBlock(bh)
+		}
+	}
+
+	tr.Ref()
+
 	return tr, nil
 }
 
-func (tableReader *tableReader) readFooter() error {
+func (tableReader *TableReader) readFooter() error {
 	footer := make([]byte, tableFooterLen)
 	_, err := tableReader.r.ReadAt(footer, int64(tableReader.tableSize-tableFooterLen))
 	if err != nil {
@@ -251,8 +277,8 @@ func (tableReader *tableReader) readFooter() error {
 }
 
 // todo used cache
-func (tableReader *tableReader) readRawBlock(bh blockHandle) (*dataBlock, error) {
-	r := tableReader.r
+func (tr *TableReader) readRawBlock(bh blockHandle) (*dataBlock, error) {
+	r := tr.r
 
 	data := make([]byte, bh.length+blockTailLen)
 
@@ -282,19 +308,27 @@ func (tableReader *tableReader) readRawBlock(bh blockHandle) (*dataBlock, error)
 	return block, nil
 }
 
-func (tr *tableReader) getIndexBlock() (*dataBlock, error) {
+func (tr *TableReader) getIndexBlock() (b *dataBlock, err error) {
+
+	defer func() {
+		if b != nil {
+			b.Ref() // for caller
+		}
+	}()
+
 	if tr.indexBlock != nil {
 		return tr.indexBlock, nil
 	}
-	b, err := tr.readRawBlock(tr.indexBH)
+	b, err = tr.readRawBlock(tr.indexBH)
 	if err != nil {
 		return nil, err
 	}
-	return b, nil
+	tr.indexBlock = b
+	return
 }
 
 // Seek return gte key
-func (tr *tableReader) find(key InternalKey) (ikey InternalKey, value []byte, err error) {
+func (tr *TableReader) find(key InternalKey, noValue bool) (ikey InternalKey, value []byte, err error) {
 	indexBlock, err := tr.getIndexBlock()
 	if err != nil {
 		return
@@ -322,7 +356,9 @@ func (tr *tableReader) find(key InternalKey) (ikey InternalKey, value []byte, er
 
 	if dataBlockIter.Seek(key) {
 		ikey = dataBlockIter.Key()
-		value = append([]byte(nil), dataBlockIter.value...)
+		if !noValue {
+			value = append([]byte(nil), dataBlockIter.value...)
+		}
 		return
 	}
 
@@ -356,16 +392,48 @@ func (tr *tableReader) find(key InternalKey) (ikey InternalKey, value []byte, er
 	}
 
 	ikey = dataBlockIter1.Key()
-	value = append([]byte(nil), dataBlockIter1.Value()...)
+	if !noValue {
+		value = append([]byte(nil), dataBlockIter.value...)
+	}
 	return
+}
+
+func (tr *TableReader) NewIterator() (Iterator, error) {
+	indexer, err := newIndexIter(tr)
+	if err != nil {
+		return nil, err
+	}
+	return newIndexedIterator(indexer), nil
 }
 
 type indexIter struct {
 	*blockIter
-	tr *tableReader
+	tr *TableReader
+	*BasicReleaser
 }
 
-func (indexIter *indexIter) Get() iterator {
+func newIndexIter(tr *TableReader) (*indexIter, error) {
+	indexBlock, err := tr.getIndexBlock()
+	if err != nil {
+		return nil, err
+	}
+	tr.Ref()
+	blockIter := newBlockIter(indexBlock)
+
+	ii := &indexIter{
+		blockIter: blockIter,
+		tr:        tr,
+		BasicReleaser: &BasicReleaser{
+			OnClose: func() {
+				blockIter.UnRef()
+				tr.UnRef()
+			},
+		},
+	}
+	return ii, nil
+}
+
+func (indexIter *indexIter) Get() Iterator {
 	value := indexIter.Value()
 	if value == nil {
 		return nil
@@ -384,5 +452,13 @@ func (indexIter *indexIter) Get() iterator {
 
 }
 
-type metaBlock struct {
+type filterBlock struct {
+	data         []byte
+	offsetOffset int
+	offsets      []int
+	baseLg       uint8
+}
+
+func (tr *TableReader) readFilterBlock(bh blockHandle) *filterBlock {
+
 }

@@ -2,7 +2,7 @@ package sstable
 
 import "sync/atomic"
 
-type iterator interface {
+type Iterator interface {
 	Releaser
 	Seek(key InternalKey) bool
 	SeekFirst() bool
@@ -13,8 +13,8 @@ type iterator interface {
 }
 
 type iteratorIndexer interface {
-	iterator
-	Get() iterator
+	Iterator
+	Get() Iterator
 }
 
 type emptyIterator struct{}
@@ -57,10 +57,11 @@ type Releaser interface {
 }
 
 type BasicReleaser struct {
-	ref     int32
-	OnClose func()
-	OnRef   func()
-	OnUnRef func()
+	released bool
+	ref      int32
+	OnClose  func()
+	OnRef    func()
+	OnUnRef  func()
 }
 
 func (br *BasicReleaser) Ref() int32 {
@@ -80,6 +81,7 @@ func (br *BasicReleaser) UnRef() int32 {
 	}
 	if newInt32 == 0 {
 		if br.OnClose != nil {
+			br.released = true
 			br.OnClose()
 		}
 	}
@@ -87,18 +89,118 @@ func (br *BasicReleaser) UnRef() int32 {
 }
 
 type indexedIterator struct {
+	*BasicReleaser
 	indexed iteratorIndexer
-	data    iterator
+	data    Iterator
 	err     error
 	ikey    InternalKey
 	value   []byte
 }
 
+func newIndexedIterator(indexed iteratorIndexer) Iterator {
+	ii := &indexedIterator{
+		indexed: indexed,
+		BasicReleaser: &BasicReleaser{
+			OnClose: func() {
+				indexed.UnRef()
+			},
+		},
+	}
+	return ii
+}
+
 func (iter *indexedIterator) clearData() {
-	iter.ikey = iter.ikey[:0]
-	iter.value = iter.value[:0]
+	if iter.data != nil {
+		iter.data.UnRef()
+		iter.data = nil
+	}
+}
+
+func (iter *indexedIterator) setData() {
+	iter.data = iter.indexed.Get()
 }
 
 func (iter *indexedIterator) Next() bool {
 
+	if iter.err != nil {
+		return false
+	}
+
+	if iter.released {
+		iter.err = ErrReleased
+		return false
+	}
+
+	if iter.data != nil && iter.data.Next() {
+		return true
+	}
+
+	iter.clearData()
+
+	if iter.indexed.Next() {
+		iter.setData()
+		return iter.Next()
+	}
+
+	return false
+}
+
+func (iter *indexedIterator) SeekFirst() bool {
+
+	if iter.err != nil {
+		return false
+	}
+
+	if iter.released {
+		iter.err = ErrReleased
+		return false
+	}
+
+	iter.clearData()
+	if !iter.indexed.SeekFirst() {
+		return false
+	}
+
+	iter.setData()
+	return iter.Next()
+}
+
+func (iter *indexedIterator) Seek(key InternalKey) bool {
+	if iter.err != nil {
+		return false
+	}
+
+	if iter.released {
+		iter.err = ErrReleased
+		return false
+	}
+
+	iter.clearData()
+
+	if !iter.indexed.Seek(key) {
+		return false
+	}
+
+	iter.setData()
+
+	return iter.data.Seek(key)
+
+}
+
+func (iter *indexedIterator) Key() []byte {
+	if iter.data != nil {
+		return iter.data.Key()
+	}
+	return nil
+}
+
+func (iter *indexedIterator) Value() []byte {
+	if iter.data != nil {
+		return iter.data.Value()
+	}
+	return nil
+}
+
+func (iter *indexedIterator) Valid() error {
+	return iter.err
 }

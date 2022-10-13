@@ -32,6 +32,8 @@ const (
 	compressionTypeSnappy CompressionType = 1
 )
 
+var defaultFilter = NewBloomFilter(10)
+
 func (ik InternalKey) assert() {
 	if len(ik) < 8 {
 		panic("invalid internal key")
@@ -193,7 +195,7 @@ func (s sFiles) getOverlapped(imin InternalKey, imax InternalKey, overlapped boo
 }
 
 // todo finish it
-func (fileMeta *FileMeta) makeInputMergedIterator() iterator {
+func (fileMeta *FileMeta) makeInputMergedIterator() Iterator {
 	return nil
 }
 
