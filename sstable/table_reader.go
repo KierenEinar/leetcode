@@ -224,6 +224,7 @@ func NewTableReader(r Reader, fileSize int) (*TableReader, error) {
 				_ = r.Close()
 			},
 		},
+		iFilter: defaultFilter,
 	}
 	err = tr.readFooter()
 	if err != nil {
@@ -248,7 +249,10 @@ func NewTableReader(r Reader, fileSize int) (*TableReader, error) {
 		k := metaIter.Key()
 		if len(k) > 0 && bytes.Compare(k, []byte("filter.bloomFilter")) == 0 {
 			_, bh := readBH(metaIter.Value())
-			tr.metaBlock = tr.readMetaBlock(bh)
+			tr.filterBlock, err = tr.readFilterBlock(bh)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -285,6 +289,10 @@ func (tr *TableReader) readRawBlock(bh blockHandle) (*dataBlock, error) {
 	n, err := r.ReadAt(data, int64(bh.offset))
 	if err != nil {
 		return nil, err
+	}
+
+	if n < 5 {
+		return nil, NewErrCorruption("too short")
 	}
 
 	rawData := data[:n-5]
@@ -328,7 +336,7 @@ func (tr *TableReader) getIndexBlock() (b *dataBlock, err error) {
 }
 
 // Seek return gte key
-func (tr *TableReader) find(key InternalKey, noValue bool) (ikey InternalKey, value []byte, err error) {
+func (tr *TableReader) find(key InternalKey, noValue bool, filtered bool) (ikey InternalKey, value []byte, err error) {
 	indexBlock, err := tr.getIndexBlock()
 	if err != nil {
 		return
@@ -344,6 +352,14 @@ func (tr *TableReader) find(key InternalKey, noValue bool) (ikey InternalKey, va
 	}
 
 	_, blockHandle := readBH(indexBlockIter.Value())
+
+	if filtered {
+		contains := tr.filterBlock.mayContains(tr.iFilter, blockHandle, key)
+		if !contains {
+			err = ErrNotFound
+			return
+		}
+	}
 
 	dataBlock, err := tr.readRawBlock(blockHandle)
 	if err != nil {
@@ -396,6 +412,30 @@ func (tr *TableReader) find(key InternalKey, noValue bool) (ikey InternalKey, va
 		value = append([]byte(nil), dataBlockIter.value...)
 	}
 	return
+}
+
+func (tr *TableReader) Find(key InternalKey) (rKey InternalKey, value []byte, err error) {
+	return tr.find(key, false, true)
+}
+
+func (tr *TableReader) FindKey(key InternalKey) (rKey InternalKey, err error) {
+	rKey, _, err = tr.find(key, true, true)
+	return
+}
+
+func (tr *TableReader) Get(key InternalKey) (value []byte, err error) {
+
+	rKey, value, err := tr.find(key, false, true)
+	if err != nil {
+		return
+	}
+
+	if bytes.Compare(rKey.ukey(), key.ukey()) != 0 {
+		err = ErrNotFound
+		return
+	}
+
+	return value, nil
 }
 
 func (tr *TableReader) NewIterator() (Iterator, error) {
@@ -457,8 +497,48 @@ type filterBlock struct {
 	offsetOffset int
 	offsets      []int
 	baseLg       uint8
+	filterNums   int
 }
 
-func (tr *TableReader) readFilterBlock(bh blockHandle) *filterBlock {
+func (tr *TableReader) readFilterBlock(bh blockHandle) (*filterBlock, error) {
 
+	dataBlock, err := tr.readRawBlock(bh)
+	if err != nil {
+		return nil, err
+	}
+
+	dataLen := len(dataBlock.data)
+
+	baseLg := dataBlock.data[dataLen-1]
+	lastOffsetB := dataBlock.data[dataLen-5:]
+
+	lastOffset := int(binary.LittleEndian.Uint32(lastOffsetB))
+	nums := (dataLen - lastOffset - 1) / 4
+
+	offsets := make([]int, 0, nums)
+	for i := 0; i < nums; i++ {
+		offsets = append(offsets, int(binary.LittleEndian.Uint32(dataBlock.data[lastOffset+i*4:])))
+	}
+
+	filter := dataBlock.data[:lastOffset]
+	return &filterBlock{
+		data:         filter,
+		offsetOffset: lastOffset,
+		offsets:      offsets,
+		baseLg:       baseLg,
+		filterNums:   nums - 1,
+	}, nil
+}
+
+func (filterBlock *filterBlock) mayContains(iFilter IFilter, bh blockHandle, ikey InternalKey) bool {
+
+	idx := int(bh.offset / 1 << filterBlock.baseLg)
+	if idx+1 > filterBlock.filterNums {
+		return false
+	}
+
+	offsetN := filterBlock.offsets[idx]
+	offsetM := filterBlock.offsets[idx+1]
+	filter := filterBlock.data[offsetN:offsetM]
+	return iFilter.MayContains(filter, ikey.ukey())
 }

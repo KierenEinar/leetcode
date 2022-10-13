@@ -204,3 +204,6 @@ func (iter *indexedIterator) Value() []byte {
 func (iter *indexedIterator) Valid() error {
 	return iter.err
 }
+
+type MergeIterator struct {
+}
