@@ -200,6 +200,6 @@ func (fileMeta *FileMeta) makeInputMergedIterator() Iterator {
 }
 
 // todo finish it
-func (fileMeta *FileMeta) createNewTable(fileSize int) (*tableWriter, error) {
+func (fileMeta *FileMeta) createNewTable(fileSize int) (*TableWriter, error) {
 	return nil, nil
 }

@@ -38,7 +38,7 @@ type Compaction struct {
 	sFiles      [2]sFiles
 	levels      Levels
 	tableSize   int
-	tableWriter *tableWriter
+	tableWriter *TableWriter
 	minSeq      uint64
 
 	// grandparent overlapped
@@ -78,7 +78,7 @@ func (fileMeta *FileMeta) pickCompaction() *Compaction {
 
 }
 
-func (fileMeta *FileMeta) finishCompactionOutputFile(tableWriter *tableWriter) error {
+func (fileMeta *FileMeta) finishCompactionOutputFile(tableWriter *TableWriter) error {
 	return nil
 }
 
@@ -93,11 +93,11 @@ func (fileMeta *FileMeta) doCompaction(compaction *Compaction) error {
 
 	iter := fileMeta.makeInputMergedIterator()
 
-	for iter.next() {
+	for iter.Next() {
 
 		var drop = false
 
-		ikey := iter.key()
+		ikey := iter.Key()
 		if compaction.tableWriter != nil && compaction.shouldStopBefore(ikey) {
 			err := fileMeta.finishCompactionOutputFile(compaction.tableWriter)
 			if err != nil {
@@ -135,7 +135,7 @@ func (fileMeta *FileMeta) doCompaction(compaction *Compaction) error {
 				compaction.tableWriter = builder
 			}
 
-			compaction.tableWriter.appendKV(ikey, iter.value())
+			compaction.tableWriter.Append(ikey, iter.Value())
 			if compaction.tableWriter.fileSize() >= defaultCompactionTableSize {
 				cErr := fileMeta.finishCompactionOutputFile(compaction.tableWriter)
 				if cErr != nil {
