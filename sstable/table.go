@@ -195,6 +195,6 @@ func (s tFiles) getOverlapped(imin InternalKey, imax InternalKey, overlapped boo
 }
 
 // todo finish it
-func (fileMeta *FileMeta) createNewTable(fileSize int) (*TableWriter, error) {
+func (fileMeta *FileMeta) createNewTable(fd Fd, fileSize int) (*TableWriter, error) {
 	return nil, nil
 }

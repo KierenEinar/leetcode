@@ -1,19 +1,26 @@
 package sstable
 
-import "sync/atomic"
+import (
+	"sort"
+	"sync/atomic"
+)
 
-type Iterator interface {
+type CommonIterator interface {
 	Releaser
 	Seek(key InternalKey) bool
 	SeekFirst() bool
 	Next() bool
-	Key() []byte
-	Value() []byte
 	Valid() error
 }
 
+type Iterator interface {
+	CommonIterator
+	Key() []byte
+	Value() []byte
+}
+
 type iteratorIndexer interface {
-	Iterator
+	CommonIterator
 	Get() Iterator
 }
 
@@ -183,8 +190,14 @@ func (iter *indexedIterator) Seek(key InternalKey) bool {
 
 	iter.setData()
 
-	return iter.data.Seek(key)
+	if !iter.data.Seek(key) {
+		iter.clearData()
+		if !iter.Next() {
+			return false
+		}
+	}
 
+	return true
 }
 
 func (iter *indexedIterator) Key() []byte {
@@ -351,4 +364,104 @@ func (mi *MergeIterator) minHeapLess(data []interface{}, i, j int) bool {
 		return true
 	}
 	return false
+}
+
+type tFileArrIteratorIndexer struct {
+	*BasicReleaser
+	err       error
+	tFiles    tFiles
+	tableIter Iterator
+	index     int
+	len       int
+}
+
+func newTFileArrIteratorIndexer(tFiles tFiles) iteratorIndexer {
+	indexer := &tFileArrIteratorIndexer{
+		tFiles: tFiles,
+		index:  0,
+		len:    len(tFiles),
+	}
+	indexer.OnClose = func() {
+		if indexer.tableIter != nil {
+			indexer.tableIter.UnRef()
+		}
+		indexer.index = 0
+		indexer.tFiles = indexer.tFiles[:0]
+	}
+	return indexer
+}
+
+func (indexer *tFileArrIteratorIndexer) Next() bool {
+
+	if indexer.err != nil {
+		return false
+	}
+	if indexer.released {
+		indexer.err = ErrReleased
+		return false
+	}
+
+	if indexer.index <= indexer.len-1 {
+		tFile := indexer.tFiles[indexer.index]
+		tr, err := NewTableReader(nil, tFile.Size)
+		if err != nil {
+			indexer.err = err
+			return false
+		}
+		if indexer.tableIter != nil {
+			indexer.tableIter.UnRef()
+		}
+		indexer.tableIter, indexer.err = tr.NewIterator()
+		if indexer.err != nil {
+			return false
+		}
+		indexer.index++
+		return true
+	}
+
+	return false
+
+}
+
+func (indexer *tFileArrIteratorIndexer) SeekFirst() bool {
+	if indexer.err != nil {
+		return false
+	}
+	if indexer.released {
+		indexer.err = ErrReleased
+		return false
+	}
+	indexer.index = 0
+	return indexer.Next()
+}
+
+func (indexer *tFileArrIteratorIndexer) Seek(ikey InternalKey) bool {
+
+	if indexer.err != nil {
+		return false
+	}
+	if indexer.released {
+		indexer.err = ErrReleased
+		return false
+	}
+
+	n := sort.Search(indexer.len, func(i int) bool {
+		r := indexer.tFiles[i].iMax.compare(ikey)
+		return r >= 0
+	})
+
+	if n == indexer.len {
+		return false
+	}
+
+	indexer.index = n
+	return indexer.Next()
+}
+
+func (indexer *tFileArrIteratorIndexer) Get() Iterator {
+	return indexer.tableIter
+}
+
+func (indexer *tFileArrIteratorIndexer) Valid() error {
+	return indexer.err
 }

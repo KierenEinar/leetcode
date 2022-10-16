@@ -283,5 +283,5 @@ func (s tFiles) getRange() (imin InternalKey, imax InternalKey) {
 }
 
 func (c *Compaction) makeInputMergedIterator() Iterator {
-	return nil
+
 }

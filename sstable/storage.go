@@ -1,6 +1,8 @@
 package sstable
 
-import "io"
+import (
+	"io"
+)
 
 type Writer interface {
 	io.Writer
@@ -17,4 +19,10 @@ type Reader interface {
 
 type Syncer interface {
 	Sync() error
+}
+
+type Fd struct{}
+
+type Storage interface {
+	Open()
 }
