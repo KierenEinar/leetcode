@@ -22,16 +22,17 @@ type Heap struct {
 	Less      HeapLess
 }
 
-var (
-	heapHead = []byte("heap.head")
-)
-
 func InitHeap(hl HeapLess) *Heap {
 	h := new(Heap)
 	h.Less = hl
 	h.data = make([]interface{}, 0)
-	h.data = append(h.data, heapHead)
+	h.data = append(h.data, nil)
 	return h
+}
+
+func (h *Heap) Clear() {
+	h.data = h.data[:1]
+	h.tailIndex = 0
 }
 
 func (h *Heap) Push(data interface{}) {
@@ -114,14 +115,6 @@ func (h *Heap) sink() {
 		} else {
 			break
 		}
-	}
-
-}
-
-func (h *Heap) debug() {
-
-	for i := 1; i < h.tailIndex; i++ {
-
 	}
 
 }

@@ -206,4 +206,149 @@ func (iter *indexedIterator) Valid() error {
 }
 
 type MergeIterator struct {
+	*BasicReleaser
+	err     error
+	iters   []Iterator
+	heap    *Heap
+	keys    [][]byte
+	iterIdx int // current iter need to fill the heap
+	dir     direction
+	ikey    []byte
+	value   []byte
+}
+
+func NewMergeIterator(iters []Iterator) *MergeIterator {
+
+	mi := &MergeIterator{
+		iters: iters,
+		keys:  make([][]byte, len(iters)),
+	}
+
+	mi.heap = InitHeap(mi.minHeapLess)
+	mi.OnClose = func() {
+		mi.heap.Clear()
+		for i := range iters {
+			iters[i].UnRef()
+		}
+		mi.keys = mi.keys[:0]
+		mi.ikey = nil
+		mi.value = nil
+	}
+	return mi
+}
+
+func (mi *MergeIterator) SeekFirst() bool {
+
+	if mi.err != nil {
+		return false
+	}
+
+	if mi.released {
+		mi.err = ErrReleased
+		return false
+	}
+
+	mi.heap.Clear()
+	mi.dir = dirSOI
+	mi.ikey = mi.ikey[:0]
+	mi.value = mi.value[:0]
+	for i := 0; i < len(mi.iters); i++ {
+		iter := mi.iters[i]
+		if !iter.SeekFirst() {
+			return false
+		}
+		mi.heap.Push(i)
+		mi.keys[i] = iter.Key()
+	}
+
+	return mi.next()
+
+}
+
+func (mi *MergeIterator) Next() bool {
+
+	if mi.err != nil {
+		return false
+	}
+
+	if mi.released {
+		mi.err = ErrReleased
+		return false
+	}
+
+	if mi.dir == dirForward {
+		return mi.next()
+	} else if mi.dir == dirEOI {
+		return false
+	} else {
+		mi.SeekFirst()
+		return mi.next()
+	}
+}
+
+func (mi *MergeIterator) Seek(ikey InternalKey) bool {
+
+	mi.heap.Clear()
+	mi.iterIdx = 0
+	if mi.err != nil {
+		return false
+	}
+	if mi.released {
+		mi.err = ErrReleased
+		return false
+	}
+	for i := range mi.iters {
+		if mi.iters[i].Seek(ikey) {
+			mi.heap.Push(i)
+		}
+	}
+	return mi.next()
+}
+
+func (mi *MergeIterator) Key() []byte {
+	return mi.ikey
+}
+
+func (mi *MergeIterator) Value() []byte {
+	return mi.value
+}
+
+func (mi *MergeIterator) next() bool {
+	mi.dir = dirForward
+	idx := mi.heap.Pop()
+	if idx == nil {
+		mi.dir = dirEOI
+		return false
+	}
+	mi.iterIdx = idx.(int)
+	iter := mi.iters[mi.iterIdx]
+	mi.ikey = iter.Key()
+	mi.value = iter.Value()
+	if iter.Next() {
+		mi.heap.Push(mi.iterIdx)
+		mi.keys[mi.iterIdx] = iter.Key()
+	} else {
+		mi.keys[mi.iterIdx] = nil
+	}
+	return true
+}
+
+func (iter *MergeIterator) Valid() error {
+	return iter.err
+}
+
+func (mi *MergeIterator) minHeapLess(data []interface{}, i, j int) bool {
+
+	indexi := data[i].(int)
+	indexj := data[j].(int)
+
+	keyi := mi.keys[indexi]
+	keyj := mi.keys[indexj]
+
+	r := InternalKey(keyi).compare(keyj)
+
+	if r > 0 {
+		return true
+	}
+	return false
 }
