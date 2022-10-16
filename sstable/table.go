@@ -83,22 +83,22 @@ const (
 	keyTypeDel   keyType = 1
 )
 
-type SortedFile struct {
+type tFile struct {
 	iMax InternalKey
 	iMin InternalKey
 	Size int
 }
 
-type sFiles []SortedFile
+type tFiles []tFile
 
-func (sf sFiles) size() (size int) {
+func (sf tFiles) size() (size int) {
 	for _, v := range sf {
 		size += v.Size
 	}
 	return
 }
 
-type Levels []sFiles
+type Levels []tFiles
 
 type FileMeta struct {
 	NextSequence uint64
@@ -116,12 +116,12 @@ func (fileMeta *FileMeta) loadCompactPtr(level int) InternalKey {
 	return fileMeta.CompactPtrs[level]
 }
 
-func (s SortedFile) isOverlapped(umin []byte, umax []byte) bool {
+func (s tFile) isOverlapped(umin []byte, umax []byte) bool {
 	smin, smax := s.iMin.ukey(), s.iMax.ukey()
 	return !(bytes.Compare(smax, umin) < 0) && !(bytes.Compare(smin, umax) > 0)
 }
 
-func (s sFiles) getOverlapped(imin InternalKey, imax InternalKey, overlapped bool) (dst sFiles) {
+func (s tFiles) getOverlapped(imin InternalKey, imax InternalKey, overlapped bool) (dst tFiles) {
 
 	if !overlapped {
 
@@ -160,7 +160,7 @@ func (s sFiles) getOverlapped(imin InternalKey, imax InternalKey, overlapped boo
 			return
 		}
 
-		dst = make(sFiles, largest-smallest)
+		dst = make(tFiles, largest-smallest)
 		copy(dst, s[smallest:largest])
 		return
 	}
@@ -192,11 +192,6 @@ func (s sFiles) getOverlapped(imin InternalKey, imax InternalKey, overlapped boo
 		}
 	}
 	return
-}
-
-// todo finish it
-func (fileMeta *FileMeta) makeInputMergedIterator() Iterator {
-	return nil
 }
 
 // todo finish it

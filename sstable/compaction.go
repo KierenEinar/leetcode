@@ -35,14 +35,14 @@ func ensureBuffer(dst []byte, size int) []byte {
 type Compaction struct {
 	inputLevel  int
 	cPtr        InternalKey
-	sFiles      [2]sFiles
+	tFiles      [2]tFiles
 	levels      Levels
 	tableSize   int
 	tableWriter *TableWriter
 	minSeq      uint64
 
 	// grandparent overlapped
-	gp                sFiles
+	gp                tFiles
 	gpi               int
 	gpOverlappedBytes int
 	gpOverlappedLimit int
@@ -56,7 +56,7 @@ func (fileMeta *FileMeta) pickCompaction() *Compaction {
 	inputLevel := fileMeta.BestCLevel
 	cPtr := fileMeta.loadCompactPtr(inputLevel)
 
-	var s0 sFiles
+	var s0 tFiles
 
 	level := fileMeta.Levels[inputLevel]
 
@@ -91,9 +91,13 @@ func (fileMeta *FileMeta) doCompaction(compaction *Compaction) error {
 		minSeq              = compaction.minSeq
 	)
 
-	iter := fileMeta.makeInputMergedIterator()
+	iter := compaction.makeInputMergedIterator()
 
 	for iter.Next() {
+
+		if err := iter.Valid(); err != nil {
+			return err
+		}
 
 		var drop = false
 
@@ -148,13 +152,13 @@ func (fileMeta *FileMeta) doCompaction(compaction *Compaction) error {
 	return nil
 }
 
-func newCompaction(inputLevel int, s0 sFiles, levels Levels) *Compaction {
+func newCompaction(inputLevel int, s0 tFiles, levels Levels) *Compaction {
 	c := &Compaction{
 		inputLevel:        inputLevel,
-		sFiles:            [2]sFiles{s0, nil},
+		tFiles:            [2]tFiles{s0, nil},
 		levels:            levels,
 		tableSize:         defaultCompactionTableSize,
-		gp:                make(sFiles, 0),
+		gp:                make(tFiles, 0),
 		gpOverlappedLimit: defaultGPOverlappedLimit * defaultCompactionTableSize,
 		baseLevelI:        make([]int, len(levels)),
 	}
@@ -166,9 +170,9 @@ func newCompaction(inputLevel int, s0 sFiles, levels Levels) *Compaction {
 func (c *Compaction) expand() {
 
 	var (
-		s0, s1 = c.sFiles[0], c.sFiles[1]
+		s0, s1 = c.tFiles[0], c.tFiles[1]
 		vs0    = c.levels[c.inputLevel]
-		vs1    = sFiles{}
+		vs1    = tFiles{}
 	)
 
 	if c.inputLevel+1 < len(c.levels) {
@@ -206,7 +210,7 @@ func (c *Compaction) expand() {
 		c.gp = c.levels[c.inputLevel+2].getOverlapped(imin, imax, false)
 	}
 
-	c.sFiles[0], c.sFiles[1] = s0, s1
+	c.tFiles[0], c.tFiles[1] = s0, s1
 
 }
 
@@ -261,7 +265,7 @@ func (c *Compaction) isBaseLevelForKey(ikey InternalKey) bool {
 
 }
 
-func (s sFiles) getRange() (imin InternalKey, imax InternalKey) {
+func (s tFiles) getRange() (imin InternalKey, imax InternalKey) {
 
 	for i, sFile := range s {
 		if i == 0 {
@@ -276,4 +280,8 @@ func (s sFiles) getRange() (imin InternalKey, imax InternalKey) {
 		}
 	}
 	return
+}
+
+func (c *Compaction) makeInputMergedIterator() Iterator {
+	return nil
 }
