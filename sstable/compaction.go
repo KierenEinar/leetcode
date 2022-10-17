@@ -93,7 +93,10 @@ func (fileMeta *FileMeta) doCompaction(compaction *Compaction) error {
 		minSeq              = compaction.minSeq
 	)
 
-	iter := compaction.makeInputMergedIterator()
+	iter, err := compaction.makeInputMergedIterator()
+	if err != nil {
+		return err
+	}
 	defer iter.UnRef()
 
 	for iter.Next() {

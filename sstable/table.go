@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"sort"
+	"sync/atomic"
 )
 
 const kMaxSequenceNum = (uint64(1) << 56) - 1
@@ -112,6 +113,10 @@ type FileMeta struct {
 	tableOperation *tableOperation
 }
 
+func (fileMeta *FileMeta) allocFileNum() uint64 {
+	return atomic.AddUint64(&fileMeta.NextFileNum, 1)
+}
+
 func (fileMeta *FileMeta) loadCompactPtr(level int) InternalKey {
 	if level < len(fileMeta.CompactPtrs) {
 		return nil
@@ -203,12 +208,14 @@ func (fileMeta *FileMeta) createNewTable(fd Fd, fileSize int) (*TableWriter, err
 }
 
 type tableOperation struct {
-	storage Storage
+	fileMeta *FileMeta
+	storage  Storage
 }
 
-func newTableOperation(s Storage) *tableOperation {
+func newTableOperation(s Storage, meta *FileMeta) *tableOperation {
 	return &tableOperation{
-		storage: s,
+		fileMeta: meta,
+		storage:  s,
 	}
 }
 
@@ -221,10 +228,43 @@ func (tableOperation *tableOperation) open(f tFile) (*TableReader, error) {
 }
 
 func (tableOperation *tableOperation) newIterator(f tFile) (Iterator, error) {
-
 	tr, err := tableOperation.open(f)
 	if err != nil {
 		return nil, err
 	}
 	return tr.NewIterator()
+}
+
+func (tableOperation *tableOperation) create() (*tWriter, error) {
+	fd := Fd{Num: tableOperation.fileMeta.allocFileNum(), FileType: SSTable}
+	w, err := tableOperation.storage.Create(fd)
+	if err != nil {
+		return nil, err
+	}
+	return &tWriter{
+		fd:    fd,
+		fw:    w,
+		tw:    NewTableWriter(w),
+		first: nil,
+		last:  nil,
+	}, nil
+}
+
+type tWriter struct {
+	fd          Fd
+	fw          Writer
+	tw          *TableWriter
+	first, last InternalKey
+}
+
+func (t *tWriter) append(ikey InternalKey, value []byte) error {
+	if t.first == nil {
+		t.first = append([]byte(nil), ikey...)
+	}
+	t.last = append(t.last[:0], ikey...)
+	return t.tw.Append(ikey, value)
+}
+
+func (t *tWriter) finish() (*tFile, error) {
+
 }

@@ -260,6 +260,13 @@ type TableWriter struct {
 	scratch [50]byte // tail 20 bytes used to encode block handle
 }
 
+func NewTableWriter(w Writer) *TableWriter {
+	return &TableWriter{
+		writer:  w,
+		iFilter: defaultFilter,
+	}
+}
+
 func (tableWriter *TableWriter) Append(ikey InternalKey, value []byte) error {
 
 	dataBlock := tableWriter.dataBlock
@@ -418,7 +425,7 @@ func (tableWriter *TableWriter) flushPendingBH(ikey InternalKey) error {
 }
 
 func (tableWriter *TableWriter) flushFooter(indexBH, metaBH blockHandle) error {
-	footer := make([]byte, 48)
+	footer := make([]byte, tableFooterLen)
 	n1 := copy(footer, writeBH(nil, indexBH))
 	_ = copy(footer[n1:], writeBH(nil, metaBH))
 	copy(footer[40:], magicByte)
@@ -432,12 +439,13 @@ func (tableWriter *TableWriter) flushFooter(indexBH, metaBH blockHandle) error {
 	if err != nil {
 		return err
 	}
+
+	tableWriter.offset += tableFooterLen
 	return nil
 }
 
-// todo finish it
 func (tableWriter *TableWriter) fileSize() int {
-	return 0
+	return tableWriter.offset
 }
 
 func iSuccessor(a InternalKey) (dest InternalKey) {

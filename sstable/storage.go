@@ -33,7 +33,7 @@ const (
 
 type Fd struct {
 	FileType
-	Num int64
+	Num uint64
 }
 
 func (fd Fd) String() string {
