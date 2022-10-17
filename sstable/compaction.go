@@ -50,6 +50,8 @@ type Compaction struct {
 
 	// approximately compact del key
 	baseLevelI []int
+
+	tableOperation *tableOperation
 }
 
 func (fileMeta *FileMeta) pickCompaction() *Compaction {
@@ -74,7 +76,7 @@ func (fileMeta *FileMeta) pickCompaction() *Compaction {
 		s0 = append(s0, level[0])
 	}
 
-	return newCompaction(inputLevel, s0, fileMeta.Levels)
+	return newCompaction(inputLevel, s0, fileMeta.Levels, fileMeta.tableOperation)
 
 }
 
@@ -92,6 +94,7 @@ func (fileMeta *FileMeta) doCompaction(compaction *Compaction) error {
 	)
 
 	iter := compaction.makeInputMergedIterator()
+	defer iter.UnRef()
 
 	for iter.Next() {
 
@@ -152,7 +155,7 @@ func (fileMeta *FileMeta) doCompaction(compaction *Compaction) error {
 	return nil
 }
 
-func newCompaction(inputLevel int, s0 tFiles, levels Levels) *Compaction {
+func newCompaction(inputLevel int, s0 tFiles, levels Levels, tableOperation *tableOperation) *Compaction {
 	c := &Compaction{
 		inputLevel:        inputLevel,
 		tFiles:            [2]tFiles{s0, nil},
@@ -161,6 +164,7 @@ func newCompaction(inputLevel int, s0 tFiles, levels Levels) *Compaction {
 		gp:                make(tFiles, 0),
 		gpOverlappedLimit: defaultGPOverlappedLimit * defaultCompactionTableSize,
 		baseLevelI:        make([]int, len(levels)),
+		tableOperation:    tableOperation,
 	}
 
 	c.expand()
@@ -282,6 +286,32 @@ func (s tFiles) getRange() (imin InternalKey, imax InternalKey) {
 	return
 }
 
-func (c *Compaction) makeInputMergedIterator() Iterator {
+func (c *Compaction) makeInputMergedIterator() (iter Iterator, err error) {
+
+	iters := make([]Iterator, 0)
+	defer func() {
+		if err != nil {
+			for i := range iters {
+				iters[i].UnRef()
+			}
+		}
+	}()
+
+	for i, tFile := range c.tFiles {
+		if i == 0 && c.inputLevel == 0 {
+			for _, t := range tFile {
+				iter, err := c.tableOperation.newIterator(t)
+				if err != nil {
+					return nil, err
+				}
+				iters = append(iters, iter)
+			}
+		} else {
+			indexedIterator := newIndexedIterator(newTFileArrIteratorIndexer(tFile))
+			iters = append(iters, indexedIterator)
+		}
+	}
+
+	return NewMergeIterator(iters), nil
 
 }

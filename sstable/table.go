@@ -84,6 +84,7 @@ const (
 )
 
 type tFile struct {
+	fd   Fd
 	iMax InternalKey
 	iMin InternalKey
 	Size int
@@ -101,12 +102,14 @@ func (sf tFiles) size() (size int) {
 type Levels []tFiles
 
 type FileMeta struct {
-	NextSequence uint64
-	Levels       Levels
-	NextFileNum  uint64
-	CompactPtrs  []InternalKey // 合并的指针
-	BestCScore   float64       // 最佳合并层的分数
-	BestCLevel   int           // 最佳合并层的
+	NextSequence   uint64
+	Levels         Levels
+	NextFileNum    uint64
+	CompactPtrs    []InternalKey // 合并的指针
+	BestCScore     float64       // 最佳合并层的分数
+	BestCLevel     int           // 最佳合并层的
+	Storage        Storage
+	tableOperation *tableOperation
 }
 
 func (fileMeta *FileMeta) loadCompactPtr(level int) InternalKey {
@@ -197,4 +200,31 @@ func (s tFiles) getOverlapped(imin InternalKey, imax InternalKey, overlapped boo
 // todo finish it
 func (fileMeta *FileMeta) createNewTable(fd Fd, fileSize int) (*TableWriter, error) {
 	return nil, nil
+}
+
+type tableOperation struct {
+	storage Storage
+}
+
+func newTableOperation(s Storage) *tableOperation {
+	return &tableOperation{
+		storage: s,
+	}
+}
+
+func (tableOperation *tableOperation) open(f tFile) (*TableReader, error) {
+	reader, err := tableOperation.storage.Open(f.fd)
+	if err != nil {
+		return nil, err
+	}
+	return NewTableReader(reader, f.Size)
+}
+
+func (tableOperation *tableOperation) newIterator(f tFile) (Iterator, error) {
+
+	tr, err := tableOperation.open(f)
+	if err != nil {
+		return nil, err
+	}
+	return tr.NewIterator()
 }
