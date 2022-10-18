@@ -15,6 +15,8 @@ var magicByte = []byte("\x57\xfb\x80\x8b\x24\x75\x47\xdb")
 
 const blockTailLen = 5
 const tableFooterLen = 48
+const journalBlockHeaderLen = 7
+const journalBlockSize = 1 << 15
 
 var (
 	kMaxNumBytes = make([]byte, 8)
@@ -266,5 +268,27 @@ func (t *tWriter) append(ikey InternalKey, value []byte) error {
 }
 
 func (t *tWriter) finish() (*tFile, error) {
+
+	err := t.tw.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	err = t.fw.Sync()
+	if err != nil {
+		return nil, err
+	}
+
+	err = t.fw.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	return &tFile{
+		fd:   t.fd,
+		iMax: t.last,
+		iMin: t.first,
+		Size: t.tw.fileSize(),
+	}, nil
 
 }

@@ -33,13 +33,12 @@ func ensureBuffer(dst []byte, size int) []byte {
 }
 
 type Compaction struct {
-	inputLevel  int
-	cPtr        InternalKey
-	tFiles      [2]tFiles
-	levels      Levels
-	tableSize   int
-	tableWriter *TableWriter
-	minSeq      uint64
+	inputLevel int
+	cPtr       InternalKey
+	tFiles     [2]tFiles
+	levels     Levels
+	tableSize  int
+	minSeq     uint64
 
 	// grandparent overlapped
 	gp                tFiles
@@ -52,6 +51,7 @@ type Compaction struct {
 	baseLevelI []int
 
 	tableOperation *tableOperation
+	tWriter        *tWriter
 }
 
 func (fileMeta *FileMeta) pickCompaction() *Compaction {
@@ -86,6 +86,13 @@ func (fileMeta *FileMeta) finishCompactionOutputFile(tableWriter *TableWriter) e
 
 func (fileMeta *FileMeta) doCompaction(compaction *Compaction) error {
 
+	if compaction.inputLevel > 0 &&
+		len(compaction.tFiles[1]) == 0 &&
+		len(compaction.gp) <= defaultGPOverlappedLimit {
+		// just update the manifest
+
+	}
+
 	var (
 		hasCurrentUserKey   = false
 		currentUserKey      []byte
@@ -108,8 +115,8 @@ func (fileMeta *FileMeta) doCompaction(compaction *Compaction) error {
 		var drop = false
 
 		ikey := iter.Key()
-		if compaction.tableWriter != nil && compaction.shouldStopBefore(ikey) {
-			err := fileMeta.finishCompactionOutputFile(compaction.tableWriter)
+		if compaction.tWriter != nil && compaction.shouldStopBefore(ikey) {
+			err := compaction.finishCompactionOutputFile()
 			if err != nil {
 				return err
 			}

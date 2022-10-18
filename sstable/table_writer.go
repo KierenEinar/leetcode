@@ -392,11 +392,6 @@ func (tableWriter *TableWriter) writeBlock(buf *bytes.Buffer, compressionType Co
 		return nil, err
 	}
 
-	err = w.Sync()
-	if err != nil {
-		return nil, err
-	}
-
 	tableWriter.offset += n
 
 	bh := &blockHandle{
