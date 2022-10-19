@@ -122,26 +122,29 @@ func (jw *JournalWriter) Flush() error {
 
 func (jw *JournalWriter) writeRecord(data []byte, chunkType byte) error {
 	avail := len(data)
-	record := make([]byte, journalBlockHeaderLen+avail)
+	record := make([]byte, journalBlockHeaderLen)
 	checkSum := crc32.ChecksumIEEE(data)
 	binary.LittleEndian.PutUint32(record, checkSum)
 	binary.LittleEndian.PutUint16(record[4:], uint16(avail))
 	record[6] = chunkType
-	copy(record[journalBlockHeaderLen:], data)
-
+	// write header
+	copy(jw.buf[jw.offset:], record)
+	jw.offset += journalBlockHeaderLen
 	for {
-		n := copy(jw.buf[jw.offset:], record)
+		if avail == 0 {
+			return nil
+		}
+		n := copy(jw.buf[jw.offset:], data)
 		if err := jw.writeFile(jw.buf[jw.offset : jw.offset+n]); err != nil {
+			jw.seekNextBlock() // seek writer to next block
 			return err
 		}
+		jw.offset += n
 		if jw.offset >= jw.blockSize {
 			jw.offset -= jw.blockSize
 		}
 		avail -= n
-		if avail == 0 {
-			return nil
-		}
-		record = record[n:]
+		data = data[n:]
 	}
 }
 
