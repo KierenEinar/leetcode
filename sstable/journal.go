@@ -1,7 +1,6 @@
 package sstable
 
 import (
-	"bytes"
 	"encoding/binary"
 	"hash/crc32"
 )
@@ -30,104 +29,134 @@ each block is 32kb, block header is
 **/
 
 const (
-	lastType   = byte(0)
-	middleType = byte(1)
-	firstType  = byte(2)
+	fullChunk   = byte(1)
+	firstChunk  = byte(2)
+	middleChunk = byte(3)
+	lastChunk   = byte(4)
 )
 
 type JournalWriter struct {
 	w         Writer
-	block     bytes.Buffer
+	buf       [journalBlockSize]byte
 	offset    int
 	blockSize int
 }
 
 func (jw *JournalWriter) Write(chunk []byte) (n int, err error) {
-	w := jw.w
 	chunkLen := len(chunk)
-	blockRemain := jw.blockSize - jw.offset
 	chunkRemain := chunkLen
 
-	defer func() {
-
-	}()
-
 	var (
-		offset         int
-		effectiveWrite int
-		writeNums      int
-		blockType      byte
+		writeNums   int
+		chunkType   byte
+		blockRemain int
 	)
 
 	for {
+
+		var (
+			effectiveWrite int
+		)
 
 		if chunkRemain == 0 {
 			break
 		}
 
-		if blockRemain == 0 {
-			jw.block.Reset()
-			jw.offset = 0
-			blockRemain = jw.blockSize
-			continue
-		}
+		blockRemain = journalBlockSize - (jw.offset + journalBlockHeaderLen)
 
-		if blockRemain == journalBlockHeaderLen {
-			_, err := jw.writeRecord(nil, lastType)
+		if blockRemain < journalBlockHeaderLen {
+			for i := jw.offset; i < journalBlockSize; i++ {
+				jw.buf[i] = 0
+			}
+			_, err = jw.w.Write(jw.buf[jw.offset:])
 			if err != nil {
 				return 0, err
 			}
-			blockRemain = 0
+			jw.offset = 0
 			continue
 		}
 
 		if chunkRemain > blockRemain {
 			effectiveWrite = blockRemain
-			chunkRemain = effectiveWrite - blockRemain
 		} else {
 			effectiveWrite = chunkRemain
-			chunkRemain = 0
 		}
+
+		if effectiveWrite == 0 {
+			_ = jw.writeRecord(nil, fullChunk)
+			continue
+		}
+
+		chunkRemain = chunkRemain - effectiveWrite
 
 		if writeNums == 0 {
 			if chunkRemain == 0 {
-				blockType = lastType
+				chunkType = fullChunk
 			} else {
-				blockType = firstType
+				chunkType = firstChunk
 			}
 		} else {
 			if chunkRemain == 0 {
-				blockType = lastType
+				chunkType = lastChunk
 			} else {
-				blockType = middleType
+				chunkType = middleChunk
 			}
 		}
 
 		writeNums++
-		_, err = jw.writeRecord(chunk[offset:offset+effectiveWrite], blockType)
-		if err != nil {
-			return offset, err
+		if err = jw.writeRecord(chunk[n:n+effectiveWrite], chunkType); err != nil {
+			return n, err
 		}
-		offset += effectiveWrite
+
+		n = n + effectiveWrite
+
+	}
+
+	return
+
+}
+
+func (jw *JournalWriter) Flush() error {
+	return jw.w.Sync()
+}
+
+func (jw *JournalWriter) writeRecord(data []byte, chunkType byte) error {
+	avail := len(data)
+	record := make([]byte, journalBlockHeaderLen+avail)
+	checkSum := crc32.ChecksumIEEE(data)
+	binary.LittleEndian.PutUint32(record, checkSum)
+	binary.LittleEndian.PutUint16(record[4:], uint16(avail))
+	record[6] = chunkType
+	copy(record[journalBlockHeaderLen:], data)
+
+	for {
+		n := copy(jw.buf[jw.offset:], record)
+		if err := jw.writeFile(jw.buf[jw.offset : jw.offset+n]); err != nil {
+			return err
+		}
+		if jw.offset >= jw.blockSize {
+			jw.offset -= jw.blockSize
+		}
+		avail -= n
+		if avail == 0 {
+			return nil
+		}
+		record = record[n:]
 	}
 }
 
-func (jw *JournalWriter) writeRecord(data []byte, blocType byte) (int, error) {
-	emptyChunk := make([]byte, journalBlockHeaderLen)
-	checkSum := crc32.ChecksumIEEE(data)
-	binary.LittleEndian.PutUint32(emptyChunk, checkSum)
-	binary.LittleEndian.PutUint16(emptyChunk[4:], 0)
-	emptyChunk[6] = blocType
-
-	_, err := jw.block.Write(emptyChunk)
-	if err != nil {
-		return 0, err
+func (jw *JournalWriter) writeFile(data []byte) error {
+	avail := len(data)
+	for {
+		n, err := jw.w.Write(data)
+		if err != nil {
+			return err
+		}
+		avail -= n
+		if avail == 0 {
+			return nil
+		}
 	}
-	n, err := jw.block.Write(data)
-	if err != nil {
-		return 0, err
-	}
-	return n, nil
 }
 
 type JournalReader struct {
