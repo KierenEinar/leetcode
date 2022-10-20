@@ -16,7 +16,8 @@ var magicByte = []byte("\x57\xfb\x80\x8b\x24\x75\x47\xdb")
 const blockTailLen = 5
 const tableFooterLen = 48
 const journalBlockHeaderLen = 7
-const journalBlockSize = 1 << 15
+const kJournalBlockSize = 1 << 15
+const kWritableBufferSize = 1 << 16
 
 var (
 	kMaxNumBytes = make([]byte, 8)

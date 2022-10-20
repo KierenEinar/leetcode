@@ -36,13 +36,17 @@ const (
 )
 
 type JournalWriter struct {
-	w         Writer
-	buf       [journalBlockSize]byte
-	offset    int
-	blockSize int
+	err         error
+	dest        *writableFile
+	blockOffset int
 }
 
 func (jw *JournalWriter) Write(chunk []byte) (n int, err error) {
+
+	if jw.err != nil {
+		return 0, jw.err
+	}
+
 	chunkLen := len(chunk)
 	chunkRemain := chunkLen
 
@@ -62,17 +66,11 @@ func (jw *JournalWriter) Write(chunk []byte) (n int, err error) {
 			break
 		}
 
-		blockRemain = journalBlockSize - (jw.offset + journalBlockHeaderLen)
+		blockRemain = kJournalBlockSize - (jw.blockOffset + journalBlockHeaderLen)
 
 		if blockRemain < journalBlockHeaderLen {
-			for i := jw.offset; i < journalBlockSize; i++ {
-				jw.buf[i] = 0
-			}
-			_, err = jw.w.Write(jw.buf[jw.offset:])
-			if err != nil {
-				return 0, err
-			}
-			jw.offset = 0
+			_ = jw.dest.append(make([]byte, blockRemain))
+			jw.blockOffset = 0
 			continue
 		}
 
@@ -80,11 +78,6 @@ func (jw *JournalWriter) Write(chunk []byte) (n int, err error) {
 			effectiveWrite = blockRemain
 		} else {
 			effectiveWrite = chunkRemain
-		}
-
-		if effectiveWrite == 0 {
-			_ = jw.writeRecord(nil, fullChunk)
-			continue
 		}
 
 		chunkRemain = chunkRemain - effectiveWrite
@@ -103,11 +96,14 @@ func (jw *JournalWriter) Write(chunk []byte) (n int, err error) {
 			}
 		}
 
-		writeNums++
-		if err = jw.writeRecord(chunk[n:n+effectiveWrite], chunkType); err != nil {
-			return n, err
+		if effectiveWrite > 0 {
+			writeNums++
 		}
 
+		jw.err = jw.writePhysicalRecord(chunk[n:n+effectiveWrite], chunkType)
+		if jw.err != nil {
+			return 0, jw.err
+		}
 		n = n + effectiveWrite
 
 	}
@@ -116,51 +112,76 @@ func (jw *JournalWriter) Write(chunk []byte) (n int, err error) {
 
 }
 
-func (jw *JournalWriter) Flush() error {
-	return jw.w.Sync()
-}
-
-func (jw *JournalWriter) writeRecord(data []byte, chunkType byte) error {
+func (jw *JournalWriter) writePhysicalRecord(data []byte, chunkType byte) error {
 	avail := len(data)
 	record := make([]byte, journalBlockHeaderLen)
 	checkSum := crc32.ChecksumIEEE(data)
 	binary.LittleEndian.PutUint32(record, checkSum)
 	binary.LittleEndian.PutUint16(record[4:], uint16(avail))
 	record[6] = chunkType
-	// write header
-	copy(jw.buf[jw.offset:], record)
-	jw.offset += journalBlockHeaderLen
-	for {
-		if avail == 0 {
-			return nil
-		}
-		n := copy(jw.buf[jw.offset:], data)
-		if err := jw.writeFile(jw.buf[jw.offset : jw.offset+n]); err != nil {
-			jw.seekNextBlock() // seek writer to next block
-			return err
-		}
-		jw.offset += n
-		if jw.offset >= jw.blockSize {
-			jw.offset -= jw.blockSize
-		}
-		avail -= n
-		data = data[n:]
+	jw.blockOffset += avail + journalBlockHeaderLen
+	err := jw.dest.append(record)
+	if err != nil {
+		return err
 	}
+	err = jw.dest.append(data)
+	if err != nil {
+		return err
+	}
+	return jw.dest.flush()
 }
 
-func (jw *JournalWriter) writeFile(data []byte) error {
-	avail := len(data)
-	for {
-		n, err := jw.w.Write(data)
-		if err != nil {
-			return err
-		}
-		avail -= n
-		if avail == 0 {
-			return nil
-		}
+type writableFile struct {
+	w   Writer
+	pos int
+	buf [kWritableBufferSize]byte
+}
+
+func (w *writableFile) append(data []byte) error {
+
+	writeSize := len(data)
+	copySize := copy(w.buf[w.pos:], data)
+	// buf can hold entire data
+	if copySize == writeSize {
+		return nil
 	}
+
+	// buf is full and still need to add the data
+	// so just writer to file and clear the buf
+	if err := w.flush(); err != nil {
+		return err
+	}
+
+	// calculate remain write size
+	writeSize -= copySize
+	if writeSize <= kWritableBufferSize {
+		n := copy(w.buf[:], data[copySize:])
+		w.pos = n
+		return nil
+	}
+
+	// otherwise, the data is too large, so write to file direct
+	if _, err := w.w.Write(data); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *writableFile) flush() error {
+	if w.pos == 0 {
+		return nil
+	}
+	_, err := w.w.Write(w.buf[:w.pos])
+	w.pos = 0
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 type JournalReader struct {
+}
+
+func (jr *JournalReader) Read([]byte) (n int, err error) {
+
 }
