@@ -29,10 +29,13 @@ each block is 32kb, block header is
 **/
 
 const (
-	fullChunk   = byte(1)
-	firstChunk  = byte(2)
-	middleChunk = byte(3)
-	lastChunk   = byte(4)
+	kRecordFull    = byte(1)
+	kRecordFirst   = byte(2)
+	kRecordMiddle  = byte(3)
+	kRecordLast    = byte(4)
+	kRecordMaxType = kRecordLast
+	kBadRecord     = kRecordMaxType + 1
+	kEof           = kRecordMaxType + 2
 )
 
 type JournalWriter struct {
@@ -84,15 +87,15 @@ func (jw *JournalWriter) Write(chunk []byte) (n int, err error) {
 
 		if writeNums == 0 {
 			if chunkRemain == 0 {
-				chunkType = fullChunk
+				chunkType = kRecordFull
 			} else {
-				chunkType = firstChunk
+				chunkType = kRecordFirst
 			}
 		} else {
 			if chunkRemain == 0 {
-				chunkType = lastChunk
+				chunkType = kRecordLast
 			} else {
-				chunkType = middleChunk
+				chunkType = kRecordMiddle
 			}
 		}
 
@@ -119,11 +122,12 @@ func (jw *JournalWriter) writePhysicalRecord(data []byte, chunkType byte) error 
 	binary.LittleEndian.PutUint32(record, checkSum)
 	binary.LittleEndian.PutUint16(record[4:], uint16(avail))
 	record[6] = chunkType
-	jw.blockOffset += avail + journalBlockHeaderLen
+	jw.blockOffset += journalBlockHeaderLen
 	err := jw.dest.append(record)
 	if err != nil {
 		return err
 	}
+	jw.blockOffset += avail
 	err = jw.dest.append(data)
 	if err != nil {
 		return err
@@ -143,6 +147,7 @@ func (w *writableFile) append(data []byte) error {
 	copySize := copy(w.buf[w.pos:], data)
 	// buf can hold entire data
 	if copySize == writeSize {
+		w.pos += copySize
 		return nil
 	}
 
@@ -180,8 +185,60 @@ func (w *writableFile) flush() error {
 }
 
 type JournalReader struct {
+	src *sequentialFile
 }
 
-func (jr *JournalReader) Read([]byte) (n int, err error) {
+type sequentialFile struct {
+	r                  Reader
+	physicalReadOffset int
+	physicalN          int
+	buf                [kJournalBlockSize]byte
+	eof                bool
+}
 
+func (s *sequentialFile) readPhysicalRecord() (kRecordType byte, fragment []byte) {
+
+	for {
+		if s.physicalReadOffset+journalBlockHeaderLen > s.physicalN {
+			if !s.eof {
+				n, err := s.r.Read(s.buf[:])
+				s.physicalN += n
+				if err != nil {
+					s.eof = true
+					kRecordType = kEof
+					return
+				}
+				if n < kJournalBlockSize {
+					s.eof = true
+				}
+				continue
+			} else {
+				kRecordType = kEof
+				return
+			}
+		}
+
+		expectedSum := binary.LittleEndian.Uint32(s.buf[s.physicalReadOffset : s.physicalReadOffset+4])
+		dataLen := int(binary.LittleEndian.Uint16(s.buf[s.physicalReadOffset+4 : s.physicalReadOffset+6]))
+		kRecordType = s.buf[s.physicalReadOffset+6]
+
+		if dataLen+s.physicalReadOffset > s.physicalN {
+			kRecordType = kBadRecord
+			return
+		}
+
+		actualSum := crc32.ChecksumIEEE(s.buf[s.physicalReadOffset+journalBlockHeaderLen : s.physicalReadOffset+journalBlockHeaderLen+dataLen])
+		if expectedSum != actualSum {
+			kRecordType = kBadRecord
+			return
+		}
+
+		// last empty block
+		if dataLen == 0 {
+			continue
+		}
+
+		return
+
+	}
 }
