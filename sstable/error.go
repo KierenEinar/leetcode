@@ -21,4 +21,5 @@ var (
 	ErrUnSupportCompressionType = errors.New("leveldb/table not support compression type")
 	ErrNotFound                 = errors.New("leveldb err not found")
 	ErrReleased                 = errors.New("leveldb released")
+	ErrJournalSkipped           = errors.New("leveldb/journal skipped")
 )

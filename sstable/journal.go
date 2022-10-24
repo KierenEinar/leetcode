@@ -1,8 +1,10 @@
 package sstable
 
 import (
+	"bytes"
 	"encoding/binary"
 	"hash/crc32"
+	"io"
 )
 
 /**
@@ -184,14 +186,129 @@ func (w *writableFile) flush() error {
 	return nil
 }
 
+// JournalReader journal reader
+// usage:
+//	jr := JournalReader{}
+//	for {
+//		chunkReader, err := jr.NextChunk()
+//		if err == io.EOF {
+//			return
+//		}
+//		if err != nil {
+//			return err
+//		}
+//		chunk, err:= ioutil.ReadAll(chunkReader)
+//		if err == io.EOF {
+//			return
+//		}
+//	    if err == ErrSkip {
+//	   		continue
+//	    }
+//		if err != nil {
+//			return err
+//		}
+//		process chunk
+//	}
 type JournalReader struct {
-	src *sequentialFile
+	src     *sequentialFile
+	scratch bytes.Buffer // for reused read
+}
+
+type chunkReader struct {
+	jr               *JournalReader
+	inFragmentRecord bool // current fragment is part of chunk ?
+	eof              bool
+}
+
+func (jr *JournalReader) NextChunk() (io.Reader, error) {
+
+	for {
+		recordType, fragment := jr.src.readPhysicalRecord()
+		switch recordType {
+		case kEof:
+			return nil, io.EOF
+		case kBadRecord, kRecordMiddle, kRecordLast: // drop whole block
+			jr.scratch.Reset()
+			continue
+		case kRecordFull:
+			jr.scratch.Write(fragment)
+			return &chunkReader{jr, false, true}, nil
+		case kRecordFirst:
+			jr.scratch.Write(fragment)
+			return &chunkReader{jr, true, false}, nil
+		}
+	}
+}
+
+func (chunk *chunkReader) Read(p []byte) (int, error) {
+
+	jr := chunk.jr
+	for {
+		if jr.scratch.Len() == 0 && chunk.eof {
+			return 0, io.EOF
+		}
+
+		n, _ := jr.scratch.Read(p)
+
+		// p is fill full
+		if n == cap(p) {
+			return n, nil
+		}
+
+		// p is not fill full, only if there has next chunk should read next chunk
+		if jr.scratch.Len() == 0 && !chunk.eof {
+
+			_, err := chunk.nextPartOfChunk()
+			if err == io.EOF {
+				chunk.eof = true
+				return n, nil
+			}
+
+			if err == ErrJournalSkipped {
+				jr.scratch.Reset()
+				return n, ErrJournalSkipped
+			}
+
+			if err != nil {
+				jr.scratch.Reset()
+				return n, err
+			}
+
+			continue
+
+		}
+	}
+}
+
+func (chunk *chunkReader) nextPartOfChunk() (n int, err error) {
+	if chunk.eof {
+		return 0, io.EOF
+	}
+
+	recordType, fragment := chunk.jr.src.readPhysicalRecord()
+	switch recordType {
+	case kBadRecord:
+		return 0, ErrJournalSkipped
+	case kEof:
+		return 0, io.EOF
+	case kRecordFirst, kRecordFull:
+		return 0, ErrJournalSkipped
+	case kRecordMiddle, kRecordLast:
+		if !chunk.inFragmentRecord {
+			return 0, ErrJournalSkipped
+		}
+		n, _ = chunk.jr.scratch.Write(fragment)
+		return n, nil
+	default:
+		return 0, ErrJournalSkipped
+	}
+
 }
 
 type sequentialFile struct {
 	r                  Reader
-	physicalReadOffset int
-	physicalN          int
+	physicalReadOffset int // current cursor read offset
+	physicalN          int // current physical offset
 	buf                [kJournalBlockSize]byte
 	eof                bool
 }
@@ -224,14 +341,18 @@ func (s *sequentialFile) readPhysicalRecord() (kRecordType byte, fragment []byte
 
 		if dataLen+s.physicalReadOffset > s.physicalN {
 			kRecordType = kBadRecord
+			s.physicalReadOffset = s.physicalN // drop whole record
 			return
 		}
 
 		actualSum := crc32.ChecksumIEEE(s.buf[s.physicalReadOffset+journalBlockHeaderLen : s.physicalReadOffset+journalBlockHeaderLen+dataLen])
 		if expectedSum != actualSum {
 			kRecordType = kBadRecord
+			s.physicalReadOffset = s.physicalN // drop whole record
 			return
 		}
+
+		s.physicalReadOffset += dataLen
 
 		// last empty block
 		if dataLen == 0 {
