@@ -240,7 +240,7 @@ func (jr *JournalReader) NextChunk() (io.Reader, error) {
 	}
 }
 
-func (chunk *chunkReader) Read(p []byte) (int, error) {
+func (chunk *chunkReader) Read(p []byte) (nRead int, rErr error) {
 
 	jr := chunk.jr
 	for {
@@ -250,9 +250,11 @@ func (chunk *chunkReader) Read(p []byte) (int, error) {
 
 		n, _ := jr.scratch.Read(p)
 
+		nRead += n
+
 		// p is fill full
 		if n == cap(p) {
-			return n, nil
+			return nRead, nil
 		}
 
 		// p is not fill full, only if there has next chunk should read next chunk
@@ -261,17 +263,17 @@ func (chunk *chunkReader) Read(p []byte) (int, error) {
 			_, err := chunk.nextPartOfChunk()
 			if err == io.EOF {
 				chunk.eof = true
-				return n, nil
+				return nRead, nil
 			}
 
 			if err == ErrJournalSkipped {
 				jr.scratch.Reset()
-				return n, ErrJournalSkipped
+				return nRead, ErrJournalSkipped
 			}
 
 			if err != nil {
 				jr.scratch.Reset()
-				return n, err
+				return nRead, err
 			}
 
 			continue
