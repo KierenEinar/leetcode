@@ -223,20 +223,25 @@ type chunkReader struct {
 func (jr *JournalReader) NextChunk() (io.Reader, error) {
 
 	for {
-		recordType, fragment := jr.src.readPhysicalRecord()
-		switch recordType {
-		case kEof:
+		kRecordType, fragment, err := jr.seekNextFragment(true)
+		if err == io.EOF {
 			return nil, io.EOF
-		case kBadRecord, kRecordMiddle, kRecordLast: // drop whole block
+		}
+		if err == ErrJournalSkipped {
+			continue
+		}
+		if err == ErrMissingChunk {
 			jr.scratch.Reset()
 			continue
-		case kRecordFull:
-			jr.scratch.Write(fragment)
-			return &chunkReader{jr, false, true}, nil
-		case kRecordFirst:
-			jr.scratch.Write(fragment)
-			return &chunkReader{jr, true, false}, nil
 		}
+		if err != nil {
+			return nil, err
+		}
+		jr.scratch.Write(fragment)
+
+		inFragmentRecord := kRecordType != kRecordFull
+		eof := !inFragmentRecord
+		return &chunkReader{jr, inFragmentRecord, eof}, nil
 	}
 }
 
@@ -259,52 +264,57 @@ func (chunk *chunkReader) Read(p []byte) (nRead int, rErr error) {
 
 		// p is not fill full, only if there has next chunk should read next chunk
 		if jr.scratch.Len() == 0 && !chunk.eof {
-
-			_, err := chunk.nextPartOfChunk()
+			recordType, fragment, err := jr.seekNextFragment(false)
 			if err == io.EOF {
 				chunk.eof = true
 				return nRead, nil
 			}
-
 			if err == ErrJournalSkipped {
 				jr.scratch.Reset()
-				return nRead, ErrJournalSkipped
+				continue
 			}
-
-			if err != nil {
+			if err == ErrMissingChunk {
 				jr.scratch.Reset()
-				return nRead, err
+				continue
 			}
-
+			if recordType == kRecordLast {
+				chunk.eof = true
+			}
+			jr.scratch.Write(fragment)
 			continue
 
 		}
 	}
 }
 
-func (chunk *chunkReader) nextPartOfChunk() (n int, err error) {
-	if chunk.eof {
-		return 0, io.EOF
+func (jr *JournalReader) seekNextFragment(first bool) (kRecordType byte, fragment []byte, err error) {
+
+	kRecordType, fragment = jr.src.readPhysicalRecord()
+	if kRecordType == kEof {
+		err = io.EOF
+		return
 	}
 
-	recordType, fragment := chunk.jr.src.readPhysicalRecord()
-	switch recordType {
-	case kBadRecord:
-		return 0, ErrJournalSkipped
-	case kEof:
-		return 0, io.EOF
+	if kRecordType == kBadRecord {
+		err = ErrJournalSkipped
+		return
+	}
+
+	switch kRecordType {
 	case kRecordFirst, kRecordFull:
-		return 0, ErrJournalSkipped
-	case kRecordMiddle, kRecordLast:
-		if !chunk.inFragmentRecord {
-			return 0, ErrJournalSkipped
+		if !first {
+			err = ErrMissingChunk
 		}
-		n, _ = chunk.jr.scratch.Write(fragment)
-		return n, nil
+		return
+	case kRecordMiddle, kRecordLast:
+		if first {
+			err = ErrMissingChunk
+		}
+		return
 	default:
-		return 0, ErrJournalSkipped
+		err = ErrJournalSkipped
+		return
 	}
-
 }
 
 type sequentialFile struct {
