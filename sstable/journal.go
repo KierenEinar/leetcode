@@ -245,6 +245,30 @@ func (jr *JournalReader) NextChunk() (io.Reader, error) {
 	}
 }
 
+func (chunk *chunkReader) ReadByte() (byte, error) {
+
+	jr := chunk.jr
+
+	for {
+		if jr.scratch.Len() > 0 {
+			return jr.scratch.ReadByte()
+		}
+		if chunk.eof {
+			return byte(0), io.EOF
+		}
+		rt, fragment, err := jr.seekNextFragment(false)
+		if err == io.EOF {
+			return byte(0), io.EOF
+		}
+		if err != nil {
+			return byte(0), err
+		}
+		chunk.eof = rt == kRecordLast
+		jr.scratch.Write(fragment)
+	}
+
+}
+
 func (chunk *chunkReader) Read(p []byte) (nRead int, rErr error) {
 
 	jr := chunk.jr
@@ -269,13 +293,9 @@ func (chunk *chunkReader) Read(p []byte) (nRead int, rErr error) {
 				chunk.eof = true
 				return nRead, nil
 			}
-			if err == ErrJournalSkipped {
+			if err != nil {
 				jr.scratch.Reset()
-				continue
-			}
-			if err == ErrMissingChunk {
-				jr.scratch.Reset()
-				continue
+				return nRead, err
 			}
 			if recordType == kRecordLast {
 				chunk.eof = true
