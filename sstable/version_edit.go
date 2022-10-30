@@ -2,6 +2,7 @@ package sstable
 
 import (
 	"encoding/binary"
+	"io"
 )
 
 const (
@@ -17,13 +18,14 @@ const (
 type VersionEdit struct {
 	scratch      [binary.MaxVarintLen64]byte
 	rec          uint64
-	comparerName string
+	comparerName []byte
 	logNum       uint64
 	nextFileNum  uint64
 	lastSeq      uint64
-	compactPtr   compactPtr
+	compactPtrs  []compactPtr
 	delTables    []delTable
 	addedTables  []addTable
+	err          error
 }
 
 type compactPtr struct {
@@ -46,14 +48,14 @@ type addTable struct {
 
 func (edit *VersionEdit) hasRec(bitPos uint8) bool {
 	// 01110 & 1 << 1 -> 01110 & 00010 ==
-	return edit.rec&1<<bitPos == 1<<bitPos
+	return edit.rec&uint64(1<<bitPos) != 0
 }
 
 func (edit *VersionEdit) setRec(bitPos uint8) {
 	edit.rec |= 1 << bitPos
 }
 
-func (edit *VersionEdit) setCompareName(cmpName string) {
+func (edit *VersionEdit) setCompareName(cmpName []byte) {
 	edit.setRec(kComparerName)
 	edit.comparerName = cmpName
 }
@@ -75,10 +77,10 @@ func (edit *VersionEdit) setLastSeq(seq uint64) {
 
 func (edit *VersionEdit) addCompactPtr(level int, ikey InternalKey) {
 	edit.setRec(kCompact)
-	edit.compactPtr = compactPtr{
+	edit.compactPtrs = append(edit.compactPtrs, compactPtr{
 		level: level,
 		ikey:  ikey,
-	}
+	})
 }
 
 func (edit *VersionEdit) addDelTable(level int, number uint64) {
@@ -95,40 +97,190 @@ func (edit *VersionEdit) addNewTable(level, size int, fileNumber uint64, imin, i
 		level:  level,
 		size:   size,
 		number: fileNumber,
-		imin:   imin,
-		imax:   imax,
+		imin:   append([]byte(nil), imin...),
+		imax:   append([]byte(nil), imax...),
 	})
 }
 
-func (edit *VersionEdit) EncodeTo(w Writer) (err error) {
+func (edit *VersionEdit) EncodeTo(dest Writer) {
 	switch {
 	case edit.hasRec(kComparerName):
-		err = edit.writeHeader(w, kComparerName)
-		if err != nil {
-			return err
-		}
+		edit.writeHeader(dest, kComparerName)
+		edit.writeBytes(dest, edit.comparerName)
 		fallthrough
 	case edit.hasRec(kLogNum):
-
+		edit.writeHeader(dest, kLogNum)
+		edit.putUVarInt(dest, edit.logNum)
+		fallthrough
+	case edit.hasRec(kNextFileNum):
+		edit.writeHeader(dest, kNextFileNum)
+		edit.putUVarInt(dest, edit.nextFileNum)
+		fallthrough
+	case edit.hasRec(kSeqNum):
+		edit.writeHeader(dest, kSeqNum)
+		edit.putUVarInt(dest, edit.lastSeq)
+		fallthrough
+	case edit.hasRec(kCompact):
+		edit.writeHeader(dest, kCompact)
+		for _, cptr := range edit.compactPtrs {
+			edit.putVarInt(dest, cptr.level)
+			edit.writeBytes(dest, cptr.ikey)
+		}
+		fallthrough
+	case edit.hasRec(kDelTable):
+		edit.writeHeader(dest, kDelTable)
+		for _, dt := range edit.delTables {
+			edit.putVarInt(dest, dt.level)
+			edit.putUVarInt(dest, dt.number)
+		}
+		fallthrough
+	case edit.hasRec(kAddTable):
+		edit.writeHeader(dest, kAddTable)
+		for _, dt := range edit.addedTables {
+			edit.putVarInt(dest, dt.level)
+			edit.putVarInt(dest, dt.size)
+			edit.putUVarInt(dest, dt.number)
+			edit.writeBytes(dest, dt.imin)
+			edit.writeBytes(dest, dt.imax)
+		}
+	default:
+		panic("leveldb/version_edit unsupport type")
 	}
 }
 
-func (edit *VersionEdit) writeHeader(w Writer, typ int) error {
-	return edit.encodeVarInt(w, uint64(typ))
+func (edit *VersionEdit) DecodeFrom(src Reader) {
+
+	var typ int
+
+	for {
+
+		typ = edit.readHeader(src)
+		if edit.err == io.EOF {
+			edit.err = nil
+			return
+		}
+		if edit.err != nil {
+			return
+		}
+
+		switch typ {
+		case kComparerName:
+			cName := edit.readBytes(src)
+			if edit.err != nil {
+				return
+			}
+			edit.comparerName = cName
+		case kNextFileNum:
+			nextFileNum := edit.readUVarInt(src)
+			if edit.err != nil {
+				return
+			}
+			edit.nextFileNum = nextFileNum
+		case kLogNum:
+			logNum := edit.readUVarInt(src)
+			if edit.err != nil {
+				return
+			}
+			edit.logNum = logNum
+		case kSeqNum:
+			seqNum := edit.readUVarInt(src)
+			if edit.err != nil {
+				return
+			}
+			edit.lastSeq = seqNum
+		case kCompact:
+			level := edit.readVarInt(src)
+			ikey := edit.readBytes(src)
+			if edit.err != nil {
+				return
+			}
+			edit.compactPtrs = append(edit.compactPtrs, compactPtr{
+				level: level,
+				ikey:  ikey,
+			})
+		case kDelTable:
+			level := edit.readVarInt(src)
+			fileNum := edit.readUVarInt(src)
+			if edit.err != nil {
+				return
+			}
+			edit.delTables = append(edit.delTables, delTable{
+				level:  level,
+				number: fileNum,
+			})
+		case kAddTable:
+			level := edit.readVarInt(src)
+			size := edit.readVarInt(src)
+			fileNum := edit.readUVarInt(src)
+			imin := edit.readBytes(src)
+			imax := edit.readBytes(src)
+			if edit.err != nil {
+				return
+			}
+			edit.addedTables = append(edit.addedTables, addTable{
+				level:  level,
+				size:   size,
+				number: fileNum,
+				imin:   imin,
+				imax:   imax,
+			})
+		}
+	}
+
 }
 
-func (edit *VersionEdit) encodeVarInt(w Writer, value uint64) error {
-	x := binary.PutUvarint(edit.scratch[:], value)
-	_, err := w.Write(edit.scratch[:x])
-	return err
+func (edit *VersionEdit) readHeader(src Reader) int {
+	return edit.readVarInt(src)
 }
 
-func (edit *VersionEdit) encodeString(w Writer, value string) error {
+func (edit *VersionEdit) writeHeader(w Writer, typ int) {
+	edit.putVarInt(w, typ)
+}
+
+func (edit *VersionEdit) writeBytes(w Writer, value []byte) {
 	size := len(value)
-	err := edit.encodeVarInt(w, uint64(size))
+	edit.putVarInt(w, size)
+	_, edit.err = w.Write(value)
+}
+
+func (edit *VersionEdit) putVarInt(w Writer, value int) {
+	x := binary.PutVarint(edit.scratch[:], int64(value))
+	_, edit.err = w.Write(edit.scratch[:x])
+	return
+}
+
+func (edit *VersionEdit) putUVarInt(w Writer, value uint64) {
+	x := binary.PutUvarint(edit.scratch[:], value)
+	_, edit.err = w.Write(edit.scratch[:x])
+	return
+}
+
+func (edit *VersionEdit) readVarInt(src Reader) int {
+	var value int64
+	value, edit.err = binary.ReadVarint(src)
+	return int(value)
+}
+
+func (edit *VersionEdit) readUVarInt(src Reader) uint64 {
+	var value uint64
+	value, edit.err = binary.ReadUvarint(src)
+	return value
+}
+
+func (edit *VersionEdit) readBytes(src Reader) []byte {
+
+	size, err := binary.ReadVarint(src)
 	if err != nil {
-		return err
+		edit.err = err
+		return nil
 	}
-	_, err = w.Write([]byte(value))
-	return err
+	b := make([]byte, size)
+	var n int
+	n, edit.err = src.Read(b)
+	if edit.err != nil {
+		return b[:n]
+	}
+
+	return b[:n]
+
 }

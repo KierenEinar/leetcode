@@ -86,7 +86,7 @@ func (fileMeta *FileMeta) finishCompactionOutputFile(tableWriter *TableWriter) e
 
 func (fileMeta *FileMeta) doCompaction(compaction *Compaction) error {
 
-	if compaction.inputLevel > 0 &&
+	if len(compaction.tFiles[0]) == 1 &&
 		len(compaction.tFiles[1]) == 0 &&
 		len(compaction.gp) <= defaultGPOverlappedLimit {
 		// just update the manifest

@@ -274,7 +274,7 @@ func (chunk *chunkReader) Read(p []byte) (nRead int, rErr error) {
 	jr := chunk.jr
 	for {
 		if jr.scratch.Len() == 0 && chunk.eof {
-			return 0, io.EOF
+			return nRead, io.EOF
 		}
 
 		n, _ := jr.scratch.Read(p)

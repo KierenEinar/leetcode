@@ -13,6 +13,7 @@ type Writer interface {
 }
 
 type Reader interface {
+	io.ByteReader
 	io.Reader
 	io.ReaderAt
 	io.Closer
