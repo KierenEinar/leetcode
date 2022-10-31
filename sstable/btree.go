@@ -166,6 +166,7 @@ func remove(node *BTreeNode, key []byte) bool {
 			copy(node.keys[idx:node.num-1], node.keys[idx+1:node.num])
 			copy(node.values[idx:node.num-1], node.values[idx+1:node.num])
 			node.num--
+			return true
 		} else {
 			prevSibling := node.siblings[idx]
 			nextSibling := node.siblings[idx+1]
@@ -192,13 +193,126 @@ func remove(node *BTreeNode, key []byte) bool {
 
 				remove(prevSibling, key)
 
+			} else if nextSibling.num > node.degree-1 {
+
+				mostLatest := nextSibling
+				for !mostLatest.isLeaf {
+					mostLatest = mostLatest.siblings[0]
+				}
+
+				moveKey := mostLatest.keys[0]
+				moveValue := mostLatest.values[0]
+				node.keys[idx] = moveKey
+				node.values[idx] = moveValue
+
+				mostLatest.keys[0] = k
+				mostLatest.values[0] = v
+
+				remove(nextSibling, key)
+
+			} else { // merge
+				merge(node, idx)
+				remove(node.siblings[idx], key)
 			}
 
 		}
+	} else {
 
-		return true
+		sibling := node.siblings[idx]
+
+		if sibling.num == node.degree-1 {
+
+			var (
+				prev *BTreeNode
+				next *BTreeNode
+			)
+
+			if idx != sibling.num {
+				next = node.siblings[idx+1]
+			}
+
+			if idx != 0 {
+				prev = node.siblings[idx-1]
+			}
+
+			if prev != nil && prev.num > node.degree-1 {
+
+				// sibling borrow prev
+				copy(sibling.keys[1:], sibling.keys[:node.num])
+				copy(sibling.values[1:], sibling.values[:node.num])
+
+				sibling.keys[0] = prev.keys[prev.num-1]
+				sibling.values[0] = prev.values[prev.num-1]
+
+				if !sibling.isLeaf {
+					copy(sibling.siblings[1:], sibling.siblings[:node.num+1])
+					sibling.siblings[0] = prev.siblings[prev.num]
+				}
+
+				sibling.num++
+				prev.num--
+
+				remove(sibling, key)
+
+			} else if next != nil && next.num > node.degree-1 {
+				// sibling borrow next
+
+				sibling.keys[sibling.num] = next.keys[0]
+				sibling.values[sibling.num] = next.values[0]
+
+				copy(next.keys[0:], next.keys[1:next.num-1])
+				copy(next.values[0:], next.values[1:next.num-1])
+
+				if sibling.isLeaf {
+					sibling.siblings[sibling.num+1] = next.siblings[0]
+					copy(next.siblings[0:], next.siblings[1:next.num+1])
+				}
+				sibling.num++
+				next.num--
+
+				remove(sibling, key)
+
+			} else {
+
+				if prev != nil {
+					// merge prev
+					merge(node, idx-1)
+					remove(node.siblings[idx-1], key)
+				} else {
+					// merge next
+					merge(node, idx)
+					remove(node.siblings[idx], key)
+				}
+			}
+
+		} else {
+			remove(sibling, key)
+		}
+
+	}
+	return false
+}
+
+func merge(node *BTreeNode, idx int) {
+	prevSibling := node.siblings[idx]
+	nextSibling := node.siblings[idx+1]
+
+	copy(prevSibling.keys[prevSibling.num+1:], nextSibling.keys[:nextSibling.num])
+	copy(prevSibling.values[prevSibling.num+1:], nextSibling.values[:nextSibling.num])
+
+	prevSibling.keys[prevSibling.num] = node.keys[idx]
+	prevSibling.values[prevSibling.num] = node.values[idx]
+
+	if !prevSibling.isLeaf {
+		copy(prevSibling.siblings[prevSibling.num+1:], nextSibling.siblings[:nextSibling.num+1])
 	}
 
+	copy(node.keys[idx:], node.keys[idx+1:node.num])
+	copy(node.values[idx:], node.values[idx+1:node.num])
+	copy(node.siblings[idx+1:], node.siblings[idx+2:node.num+1])
+	prevSibling.num += nextSibling.num + 1
+	node.num -= 1
+	nextSibling = nil
 }
 
 func assert(condition bool, msg ...string) {
