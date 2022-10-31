@@ -198,7 +198,7 @@ func (tree *Btree) remove(node *Node, key []byte) bool {
 				// step 1: change cur node
 				copy(cur.keys[1:cur.num+1], cur.keys[:cur.num])
 				copy(cur.values[1:cur.num+1], cur.values[:cur.num])
-				if cur.isLeaf {
+				if !cur.isLeaf {
 					copy(cur.sibling[1:], cur.sibling[:cur.num+1])
 					cur.sibling[0] = pre.sibling[pre.num]
 				}
@@ -227,7 +227,7 @@ func (tree *Btree) remove(node *Node, key []byte) bool {
 				// step 1
 				// change cur sibling (if have) and keys
 				cur.keys[cur.num] = node.keys[idx]
-				if cur.isLeaf {
+				if !cur.isLeaf {
 					cur.sibling[cur.num+1] = next.sibling[0]
 				}
 				cur.num++
@@ -239,7 +239,7 @@ func (tree *Btree) remove(node *Node, key []byte) bool {
 				// step 3
 				// change next sibling
 				copy(next.keys[:next.num-1], next.keys[1:next.num])
-				if next.isLeaf {
+				if !next.isLeaf {
 					copy(next.sibling[:next.num], next.sibling[1:next.num+1])
 					next.sibling[next.num+1] = nil // help gc
 				}
