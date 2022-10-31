@@ -18,6 +18,7 @@ const tableFooterLen = 48
 const journalBlockHeaderLen = 7
 const kJournalBlockSize = 1 << 15
 const kWritableBufferSize = 1 << 16
+const kLevelNum = 7
 
 var (
 	kMaxNumBytes = make([]byte, 8)
