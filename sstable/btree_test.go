@@ -9,7 +9,7 @@ import (
 func TestBTree(t *testing.T) {
 
 	tree := InitBTree(3)
-	size := uint8(100)
+	size := uint8(255)
 	insertList := make([][]byte, 0, size)
 
 	for i := uint8(0); i < size; i++ {

@@ -263,8 +263,8 @@ func remove(node *BTreeNode, key []byte) bool {
 				nodeVal := node.values[idx-1]
 
 				// sibling borrow prev
-				copy(sibling.keys[1:], sibling.keys[:node.num])
-				copy(sibling.values[1:], sibling.values[:node.num])
+				copy(sibling.keys[1:], sibling.keys[:sibling.num])
+				copy(sibling.values[1:], sibling.values[:sibling.num])
 
 				node.keys[idx-1] = prev.keys[prev.num-1]
 				node.values[idx-1] = prev.values[prev.num-1]
@@ -276,7 +276,7 @@ func remove(node *BTreeNode, key []byte) bool {
 				prev.values[prev.num-1] = nil
 
 				if !sibling.isLeaf {
-					copy(sibling.siblings[1:], sibling.siblings[:node.num+1])
+					copy(sibling.siblings[1:], sibling.siblings[:sibling.num+1])
 					sibling.siblings[0] = prev.siblings[prev.num]
 					prev.siblings[prev.num] = nil
 				}
@@ -304,7 +304,7 @@ func remove(node *BTreeNode, key []byte) bool {
 				next.keys[next.num-1] = nil
 				next.values[next.num-1] = nil
 
-				if sibling.isLeaf {
+				if !sibling.isLeaf {
 					sibling.siblings[sibling.num+1] = next.siblings[0]
 					copy(next.siblings[0:], next.siblings[1:next.num+1])
 					next.siblings[next.num] = nil
@@ -431,17 +431,19 @@ func (tree *BTree) BFS() {
 func (node *BTreeNode) bfs() {
 	queue := append([]*BTreeNode{}, node)
 	curLevelNums := 1
-	nextLevelNums := node.num + 1
+	var nextLevelNums int
 	var level int64
 	for len(queue) > 0 {
 		node := queue[0]
 		curLevelNums--
 		fmt.Printf("level=%d, keys=%v\n", level, node.keys[:node.num])
+		if !node.isLeaf {
+			nextLevelNums += node.num + 1
+		}
 		if curLevelNums == 0 {
 			level++
 			curLevelNums = nextLevelNums
-		} else {
-			nextLevelNums += node.num + 1
+			nextLevelNums = 0
 		}
 		queue = queue[1:]
 		if !node.isLeaf {
