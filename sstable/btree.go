@@ -2,6 +2,7 @@ package sstable
 
 import (
 	"bytes"
+	"fmt"
 	"sort"
 )
 
@@ -20,7 +21,7 @@ type BTreeNode struct {
 }
 
 func (node *BTreeNode) isFull() bool {
-	return node.num*2-1 == node.degree
+	return node.num == node.degree*2-1
 }
 
 func newNode(degree int, isLeaf bool) *BTreeNode {
@@ -50,7 +51,7 @@ func (btree *BTree) Insert(key, value []byte) {
 
 	if root.isFull() {
 		n := newNode(btree.degree, false)
-		k, v := root.keys[btree.degree], root.values[btree.degree]
+		k, v := root.keys[btree.degree-1], root.values[btree.degree-1]
 		z := root.splitChild()
 		n.setKVAndSibling(0, k, v, root, z)
 		root = n
@@ -61,7 +62,7 @@ func (btree *BTree) Insert(key, value []byte) {
 
 // must assert idx less than node.num and node must not full
 func (node *BTreeNode) setKVAndSibling(idx int, key, value []byte, left, right *BTreeNode) {
-	assert(idx < node.num && !node.isFull())
+	assert(!node.isFull())
 	copy(node.keys[idx+1:node.num+1], node.keys[idx:node.num])
 	copy(node.values[idx+1:node.num+1], node.values[idx:node.num])
 	node.keys[idx] = key
@@ -82,12 +83,17 @@ func (node *BTreeNode) splitChild() *BTreeNode {
 
 	copy(z.keys, node.keys[t:node.num])
 	copy(z.values, node.values[t:node.num])
-	z.num = t - 1
 	if !node.isLeaf {
 		// t = 3
 		// keys  	0   1    2   3    4
 		// sib   0    1    2   3    4    5
 		copy(z.siblings, node.siblings[t:node.num+1])
+	}
+	z.num = t - 1
+	node.num = t - 1
+	for idx := node.num; idx < len(node.keys); idx++ {
+		node.keys[idx] = nil
+		node.values[idx] = nil
 	}
 	return z
 }
@@ -125,12 +131,12 @@ func insertNonFull(node *BTreeNode, key, value []byte) {
 		return
 	}
 
-	k, v := sibling.keys[idx], sibling.values[idx]
+	k, v := sibling.keys[sibling.degree-1], sibling.values[sibling.degree-1]
 
 	z := sibling.splitChild()
 	node.setKVAndSibling(idx, k, v, sibling, z)
 
-	if bytes.Compare(k, key) > 0 {
+	if bytes.Compare(k, key) < 0 {
 		insertNonFull(z, key, value)
 	} else {
 		insertNonFull(sibling, key, value)
@@ -179,6 +185,8 @@ func remove(node *BTreeNode, key []byte) bool {
 		if node.isLeaf {
 			copy(node.keys[idx:node.num-1], node.keys[idx+1:node.num])
 			copy(node.values[idx:node.num-1], node.values[idx+1:node.num])
+			node.keys[node.num-1] = nil
+			node.values[node.num-1] = nil
 			node.num--
 			return true
 		} else {
@@ -205,7 +213,7 @@ func remove(node *BTreeNode, key []byte) bool {
 				mostlyPrevious.keys[mostlyPrevious.num-1] = k
 				mostlyPrevious.values[mostlyPrevious.num-1] = v
 
-				remove(prevSibling, key)
+				return remove(prevSibling, key)
 
 			} else if nextSibling.num > node.degree-1 {
 
@@ -222,11 +230,11 @@ func remove(node *BTreeNode, key []byte) bool {
 				mostLatest.keys[0] = k
 				mostLatest.values[0] = v
 
-				remove(nextSibling, key)
+				return remove(nextSibling, key)
 
 			} else { // merge
 				merge(node, idx)
-				remove(node.siblings[idx], key)
+				return remove(node.siblings[idx], key)
 			}
 
 		}
@@ -241,7 +249,7 @@ func remove(node *BTreeNode, key []byte) bool {
 				next *BTreeNode
 			)
 
-			if idx != sibling.num {
+			if idx != node.num {
 				next = node.siblings[idx+1]
 			}
 
@@ -249,62 +257,81 @@ func remove(node *BTreeNode, key []byte) bool {
 				prev = node.siblings[idx-1]
 			}
 
-			if prev != nil && prev.num > node.degree-1 {
+			if prev != nil && prev.num > prev.degree-1 {
+
+				nodeKey := node.keys[idx-1]
+				nodeVal := node.values[idx-1]
 
 				// sibling borrow prev
 				copy(sibling.keys[1:], sibling.keys[:node.num])
 				copy(sibling.values[1:], sibling.values[:node.num])
 
-				sibling.keys[0] = prev.keys[prev.num-1]
-				sibling.values[0] = prev.values[prev.num-1]
+				node.keys[idx-1] = prev.keys[prev.num-1]
+				node.values[idx-1] = prev.values[prev.num-1]
+
+				sibling.keys[0] = nodeKey
+				sibling.values[0] = nodeVal
+
+				prev.keys[prev.num-1] = nil
+				prev.values[prev.num-1] = nil
 
 				if !sibling.isLeaf {
 					copy(sibling.siblings[1:], sibling.siblings[:node.num+1])
 					sibling.siblings[0] = prev.siblings[prev.num]
+					prev.siblings[prev.num] = nil
 				}
 
 				sibling.num++
 				prev.num--
 
-				remove(sibling, key)
+				return remove(sibling, key)
 
-			} else if next != nil && next.num > node.degree-1 {
+			} else if next != nil && next.num > next.degree-1 {
 				// sibling borrow next
 
-				sibling.keys[sibling.num] = next.keys[0]
-				sibling.values[sibling.num] = next.values[0]
+				nodeKey := node.keys[idx]
+				nodeVal := node.values[idx]
 
-				copy(next.keys[0:], next.keys[1:next.num-1])
-				copy(next.values[0:], next.values[1:next.num-1])
+				sibling.keys[sibling.num] = nodeKey
+				sibling.values[sibling.num] = nodeVal
+
+				node.keys[idx] = next.keys[0]
+				node.values[idx] = next.values[0]
+
+				copy(next.keys[0:], next.keys[1:next.num])
+				copy(next.values[0:], next.values[1:next.num])
+
+				next.keys[next.num-1] = nil
+				next.values[next.num-1] = nil
 
 				if sibling.isLeaf {
 					sibling.siblings[sibling.num+1] = next.siblings[0]
 					copy(next.siblings[0:], next.siblings[1:next.num+1])
+					next.siblings[next.num] = nil
 				}
 				sibling.num++
 				next.num--
 
-				remove(sibling, key)
+				return remove(sibling, key)
 
 			} else {
 
 				if prev != nil {
 					// merge prev
 					merge(node, idx-1)
-					remove(node.siblings[idx-1], key)
+					return remove(node.siblings[idx-1], key)
 				} else {
 					// merge next
 					merge(node, idx)
-					remove(node.siblings[idx], key)
+					return remove(node.siblings[idx], key)
 				}
 			}
 
 		} else {
-			remove(sibling, key)
+			return remove(sibling, key)
 		}
 
 	}
-	return false
 }
 
 func merge(node *BTreeNode, idx int) {
@@ -324,6 +351,11 @@ func merge(node *BTreeNode, idx int) {
 	copy(node.keys[idx:], node.keys[idx+1:node.num])
 	copy(node.values[idx:], node.values[idx+1:node.num])
 	copy(node.siblings[idx+1:], node.siblings[idx+2:node.num+1])
+
+	node.keys[node.num-1] = nil
+	node.values[node.num-1] = nil
+	node.siblings[node.num] = nil
+
 	prevSibling.num += nextSibling.num + 1
 	node.num -= 1
 	nextSibling = nil
@@ -387,6 +419,35 @@ func has(node *BTreeNode, key []byte) bool {
 
 	return has(node.siblings[idx], key)
 
+}
+
+func (tree *BTree) BFS() {
+	if tree.root == nil {
+		return
+	}
+	tree.root.bfs()
+}
+
+func (node *BTreeNode) bfs() {
+	queue := append([]*BTreeNode{}, node)
+	curLevelNums := 1
+	nextLevelNums := node.num + 1
+	var level int64
+	for len(queue) > 0 {
+		node := queue[0]
+		curLevelNums--
+		fmt.Printf("level=%d, keys=%v\n", level, node.keys[:node.num])
+		if curLevelNums == 0 {
+			level++
+			curLevelNums = nextLevelNums
+		} else {
+			nextLevelNums += node.num + 1
+		}
+		queue = queue[1:]
+		if !node.isLeaf {
+			queue = append(queue, node.siblings[:node.num+1]...)
+		}
+	}
 }
 
 func assert(condition bool, msg ...string) {
