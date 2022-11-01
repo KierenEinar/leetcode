@@ -139,6 +139,20 @@ func insertNonFull(node *BTreeNode, key, value []byte) {
 
 func (btree *BTree) Remove(key []byte) bool {
 
+	root := btree.root
+	if root == nil {
+		return false
+	}
+
+	r := remove(root, key)
+	if root.num == 0 {
+		if root.isLeaf {
+			btree.root = nil
+		} else {
+			btree.root = root.siblings[0]
+		}
+	}
+	return r
 }
 
 // note, caller should follow this rules
@@ -313,6 +327,66 @@ func merge(node *BTreeNode, idx int) {
 	prevSibling.num += nextSibling.num + 1
 	node.num -= 1
 	nextSibling = nil
+}
+
+func (btree *BTree) Get(key []byte) ([]byte, bool) {
+	if btree.root == nil {
+		return nil, false
+	}
+	return get(btree.root, key)
+}
+
+func get(node *BTreeNode, key []byte) ([]byte, bool) {
+	idx := sort.Search(node.num, func(i int) bool {
+		return bytes.Compare(node.keys[i], key) >= 0
+	})
+
+	var found bool
+
+	if idx < node.num && bytes.Compare(node.keys[idx], key) == 0 {
+		found = true
+	}
+
+	if found {
+		return node.values[idx], true
+	}
+
+	if node.isLeaf {
+		return nil, false
+	}
+
+	return get(node.siblings[idx], key)
+
+}
+
+func (btree *BTree) Has(key []byte) bool {
+	if btree.root == nil {
+		return false
+	}
+	return has(btree.root, key)
+}
+
+func has(node *BTreeNode, key []byte) bool {
+	idx := sort.Search(node.num, func(i int) bool {
+		return bytes.Compare(node.keys[i], key) >= 0
+	})
+
+	var found bool
+
+	if idx < node.num && bytes.Compare(node.keys[idx], key) == 0 {
+		found = true
+	}
+
+	if found {
+		return true
+	}
+
+	if node.isLeaf {
+		return false
+	}
+
+	return has(node.siblings[idx], key)
+
 }
 
 func assert(condition bool, msg ...string) {
