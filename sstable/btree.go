@@ -457,3 +457,136 @@ func assert(condition bool, msg ...string) {
 		panic(msg)
 	}
 }
+
+type BTreeIter struct {
+	*BTree
+	stack  []*bTreeCursor
+	cursor *bTreeCursor
+	key    []byte
+	value  []byte
+}
+
+type bTreeCursor struct {
+	node  *BTreeNode
+	index int
+}
+
+func (tree *BTree) NewIterator() *BTreeIter {
+	iter := &BTreeIter{
+		BTree: tree,
+		stack: make([]*bTreeCursor, 0, tree.depth()),
+	}
+	return iter
+}
+
+func (tree *BTree) depth() int {
+	node := tree.root
+	depth := 1
+	for ; node != nil && !node.isLeaf; depth++ {
+		node = node.siblings[0]
+	}
+	return depth
+}
+
+func (iter *BTreeIter) SeekFirst() bool {
+	node := iter.root
+
+	// push into stack
+	for {
+		iter.stack = append(iter.stack, &bTreeCursor{
+			node:  node,
+			index: 0,
+		})
+		if node.isLeaf {
+			break
+		}
+		node = node.siblings[0]
+	}
+
+	return iter.next()
+
+}
+
+func (iter *BTreeIter) Next() bool {
+	if len(iter.stack) > 0 {
+		return iter.next()
+	}
+	return iter.SeekFirst()
+}
+
+// Seek seeks a key that gte than input key
+func (iter *BTreeIter) Seek(key []byte) bool {
+
+	// reset stack
+	iter.stack = iter.stack[:0]
+
+	node := iter.root
+
+	for {
+
+		idx := sort.Search(node.num, func(i int) bool {
+			return bytes.Compare(node.keys[i], key) >= 0
+		})
+
+		if node.isLeaf && idx == node.num {
+			iter.stack = iter.stack[:0] // reset iter
+			return false
+		}
+
+		iter.stack = append(iter.stack, &bTreeCursor{
+			node:  node,
+			index: idx,
+		})
+
+		// found case
+		if idx < node.num && bytes.Compare(node.keys[idx], key) == 0 {
+			return true
+		}
+
+		if !node.isLeaf {
+			node = node.siblings[idx]
+		} else {
+			// leaf node and found
+			if idx < node.num {
+				return true
+			}
+			return false // leaf node and not found
+		}
+	}
+
+}
+
+func (iter *BTreeIter) next() bool {
+	for len(iter.stack) > 0 {
+		cursor := iter.stack[len(iter.stack)-1]
+		if cursor.index < cursor.node.num {
+			iter.key = cursor.node.keys[cursor.index]
+			iter.value = cursor.node.values[cursor.index]
+			cursor.index++
+			if !cursor.node.isLeaf {
+				iter.stack = append(iter.stack, &bTreeCursor{
+					node:  cursor.node.siblings[cursor.index],
+					index: 0,
+				})
+			}
+			return true
+		} else {
+			iter.stack = iter.stack[:len(iter.stack)-1]
+		}
+	}
+	return false
+}
+
+func (iter *BTreeIter) Key() []byte {
+	if len(iter.stack) > 0 {
+		return iter.key
+	}
+	return nil
+}
+
+func (iter *BTreeIter) Value() []byte {
+	if len(iter.stack) > 0 {
+		return iter.value
+	}
+	return nil
+}

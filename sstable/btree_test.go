@@ -45,3 +45,27 @@ func TestBTree(t *testing.T) {
 	}
 
 }
+
+func TestBTree_Iterator(t *testing.T) {
+	tree := InitBTree(3)
+	size := uint8(255)
+	insertList := make([][]byte, 0, size)
+
+	for i := uint8(0); i < size; i++ {
+		insertList = append(insertList, []byte{i})
+	}
+	rand.Shuffle(int(size), func(i, j int) {
+		insertList[i], insertList[j] = insertList[j], insertList[i]
+	})
+
+	for i := uint8(0); i < size; i++ {
+		fmt.Printf("insert, %d\n", insertList[i])
+		tree.Insert(insertList[i], insertList[i])
+	}
+
+	iter := tree.NewIterator()
+	for iter.Next() {
+		fmt.Printf("key=%d,value=%d\n", iter.Key(), iter.Value())
+	}
+
+}
