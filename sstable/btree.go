@@ -460,10 +460,9 @@ func assert(condition bool, msg ...string) {
 
 type BTreeIter struct {
 	*BTree
-	stack  []*bTreeCursor
-	cursor *bTreeCursor
-	key    []byte
-	value  []byte
+	stack []*bTreeCursor
+	key   []byte
+	value []byte
 }
 
 type bTreeCursor struct {
@@ -540,7 +539,7 @@ func (iter *BTreeIter) Seek(key []byte) bool {
 
 		// found case
 		if idx < node.num && bytes.Compare(node.keys[idx], key) == 0 {
-			return true
+			return iter.next()
 		}
 
 		if !node.isLeaf {
@@ -548,7 +547,7 @@ func (iter *BTreeIter) Seek(key []byte) bool {
 		} else {
 			// leaf node and found
 			if idx < node.num {
-				return true
+				return iter.next()
 			}
 			return false // leaf node and not found
 		}
@@ -589,4 +588,10 @@ func (iter *BTreeIter) Value() []byte {
 		return iter.value
 	}
 	return nil
+}
+
+func (iter *BTreeIter) Reset() {
+	iter.key = nil
+	iter.value = nil
+	iter.stack = iter.stack[:0]
 }

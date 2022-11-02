@@ -68,4 +68,24 @@ func TestBTree_Iterator(t *testing.T) {
 		fmt.Printf("key=%d,value=%d\n", iter.Key(), iter.Value())
 	}
 
+	for i := uint8(0); i < 20; i++ {
+		ok := tree.Remove([]byte{i})
+		if !ok {
+			t.Fatalf("Remove not ok")
+		}
+	}
+
+	iter.Reset()
+	for iter.Next() {
+		fmt.Printf("key=%d,value=%d\n", iter.Key(), iter.Value())
+	}
+
+	iter.Seek([]byte{100})
+
+	fmt.Printf("key=%d,value=%d\n", iter.Key(), iter.Value())
+
+	for iter.Next() {
+		fmt.Printf("key=%d,value=%d\n", iter.Key(), iter.Value())
+	}
+
 }
