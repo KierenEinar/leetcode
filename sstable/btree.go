@@ -15,7 +15,7 @@ type BTree struct {
 type BTreeNode struct {
 	isLeaf   bool
 	keys     [][]byte
-	values   [][]byte
+	values   []interface{}
 	siblings []*BTreeNode
 	num      int
 	degree   int
@@ -30,7 +30,7 @@ func newNode(degree int, isLeaf bool) *BTreeNode {
 		isLeaf:   isLeaf,
 		degree:   degree,
 		keys:     make([][]byte, degree*2-1),
-		values:   make([][]byte, degree*2-1),
+		values:   make([]interface{}, degree*2-1),
 		siblings: make([]*BTreeNode, degree*2),
 		num:      0,
 	}
@@ -44,7 +44,7 @@ func InitBTree(degree int, cmp BasicComparer) *BTree {
 	}
 }
 
-func (btree *BTree) Insert(key, value []byte) {
+func (btree *BTree) Insert(key []byte, value interface{}) {
 	root := btree.root
 	if root == nil {
 		n := newNode(btree.degree, true)
@@ -63,7 +63,7 @@ func (btree *BTree) Insert(key, value []byte) {
 }
 
 // must assert idx less than node.num and node must not full
-func (node *BTreeNode) setKVAndSibling(idx int, key, value []byte, left, right *BTreeNode) {
+func (node *BTreeNode) setKVAndSibling(idx int, key []byte, value interface{}, left, right *BTreeNode) {
 	assert(!node.isFull())
 	copy(node.keys[idx+1:node.num+1], node.keys[idx:node.num])
 	copy(node.values[idx+1:node.num+1], node.values[idx:node.num])
@@ -100,7 +100,7 @@ func (node *BTreeNode) splitChild() *BTreeNode {
 	return z
 }
 
-func insertNonFull(node *BTreeNode, key, value []byte, cmp BasicComparer) {
+func insertNonFull(node *BTreeNode, key []byte, value interface{}, cmp BasicComparer) {
 
 	idx := sort.Search(node.num, func(i int) bool {
 		return cmp.Compare(node.keys[i], key) >= 0
@@ -122,7 +122,7 @@ func insertNonFull(node *BTreeNode, key, value []byte, cmp BasicComparer) {
 		copy(node.values[idx+1:node.num+1], node.values[idx:node.num])
 		node.num++
 		node.keys[idx] = append([]byte(nil), key...)
-		node.values[idx] = append([]byte(nil), value...)
+		node.values[idx] = value
 		return
 	}
 
@@ -363,14 +363,14 @@ func merge(node *BTreeNode, idx int) {
 	nextSibling = nil
 }
 
-func (btree *BTree) Get(key []byte) ([]byte, bool) {
+func (btree *BTree) Get(key []byte) (interface{}, bool) {
 	if btree.root == nil {
 		return nil, false
 	}
 	return get(btree.root, key, btree.cmp)
 }
 
-func get(node *BTreeNode, key []byte, cmp BasicComparer) ([]byte, bool) {
+func get(node *BTreeNode, key []byte, cmp BasicComparer) (interface{}, bool) {
 	idx := sort.Search(node.num, func(i int) bool {
 		return cmp.Compare(node.keys[i], key) >= 0
 	})
@@ -464,7 +464,7 @@ type BTreeIter struct {
 	*BTree
 	stack []*bTreeCursor
 	key   []byte
-	value []byte
+	value interface{}
 }
 
 type bTreeCursor struct {
@@ -585,7 +585,7 @@ func (iter *BTreeIter) Key() []byte {
 	return nil
 }
 
-func (iter *BTreeIter) Value() []byte {
+func (iter *BTreeIter) Value() interface{} {
 	if len(iter.stack) > 0 {
 		return iter.value
 	}
