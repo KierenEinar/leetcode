@@ -8,7 +8,7 @@ import (
 
 func TestBTree(t *testing.T) {
 
-	tree := InitBTree(3)
+	tree := InitBTree(3, DefaultComparer)
 	size := uint8(255)
 	insertList := make([][]byte, 0, size)
 
@@ -47,7 +47,7 @@ func TestBTree(t *testing.T) {
 }
 
 func TestBTree_Iterator(t *testing.T) {
-	tree := InitBTree(3)
+	tree := InitBTree(3, DefaultComparer)
 	size := uint8(255)
 	insertList := make([][]byte, 0, size)
 

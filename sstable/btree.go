@@ -9,6 +9,7 @@ import (
 type BTree struct {
 	degree int
 	root   *BTreeNode
+	cmp    BasicComparer
 }
 
 type BTreeNode struct {
@@ -36,9 +37,10 @@ func newNode(degree int, isLeaf bool) *BTreeNode {
 	return node
 }
 
-func InitBTree(degree int) *BTree {
+func InitBTree(degree int, cmp BasicComparer) *BTree {
 	return &BTree{
 		degree: degree,
+		cmp:    cmp,
 	}
 }
 
@@ -56,7 +58,7 @@ func (btree *BTree) Insert(key, value []byte) {
 		n.setKVAndSibling(0, k, v, root, z)
 		root = n
 	}
-	insertNonFull(root, key, value)
+	insertNonFull(root, key, value, btree.cmp)
 	btree.root = root
 }
 
@@ -98,16 +100,16 @@ func (node *BTreeNode) splitChild() *BTreeNode {
 	return z
 }
 
-func insertNonFull(node *BTreeNode, key, value []byte) {
+func insertNonFull(node *BTreeNode, key, value []byte, cmp BasicComparer) {
 
 	idx := sort.Search(node.num, func(i int) bool {
-		return bytes.Compare(node.keys[i], key) >= 0
+		return cmp.Compare(node.keys[i], key) >= 0
 	})
 
 	var found bool
 
 	if idx < node.num {
-		found = bytes.Compare(node.keys[idx], key) == 0
+		found = cmp.Compare(node.keys[idx], key) == 0
 	}
 
 	if found {
@@ -127,7 +129,7 @@ func insertNonFull(node *BTreeNode, key, value []byte) {
 	sibling := node.siblings[idx]
 
 	if !sibling.isFull() {
-		insertNonFull(node.siblings[idx], key, value)
+		insertNonFull(node.siblings[idx], key, value, cmp)
 		return
 	}
 
@@ -137,9 +139,9 @@ func insertNonFull(node *BTreeNode, key, value []byte) {
 	node.setKVAndSibling(idx, k, v, sibling, z)
 
 	if bytes.Compare(k, key) < 0 {
-		insertNonFull(z, key, value)
+		insertNonFull(z, key, value, cmp)
 	} else {
-		insertNonFull(sibling, key, value)
+		insertNonFull(sibling, key, value, cmp)
 	}
 }
 
@@ -150,7 +152,7 @@ func (btree *BTree) Remove(key []byte) bool {
 		return false
 	}
 
-	r := remove(root, key)
+	r := remove(root, key, btree.cmp)
 	if root.num == 0 {
 		if root.isLeaf {
 			btree.root = nil
@@ -164,16 +166,16 @@ func (btree *BTree) Remove(key []byte) bool {
 // note, caller should follow this rules
 // * only root node's num can lt degree if is root
 // * other wise node's num should be gte than degree
-func remove(node *BTreeNode, key []byte) bool {
+func remove(node *BTreeNode, key []byte, cmp BasicComparer) bool {
 
 	idx := sort.Search(node.num, func(i int) bool {
-		return bytes.Compare(node.keys[i], key) >= 0
+		return cmp.Compare(node.keys[i], key) >= 0
 	})
 
 	var found bool
 
 	if idx < node.num {
-		found = bytes.Compare(node.keys[idx], key) == 0
+		found = cmp.Compare(node.keys[idx], key) == 0
 	}
 
 	if node.isLeaf && !found {
@@ -213,7 +215,7 @@ func remove(node *BTreeNode, key []byte) bool {
 				mostlyPrevious.keys[mostlyPrevious.num-1] = k
 				mostlyPrevious.values[mostlyPrevious.num-1] = v
 
-				return remove(prevSibling, key)
+				return remove(prevSibling, key, cmp)
 
 			} else if nextSibling.num > node.degree-1 {
 
@@ -230,11 +232,11 @@ func remove(node *BTreeNode, key []byte) bool {
 				mostLatest.keys[0] = k
 				mostLatest.values[0] = v
 
-				return remove(nextSibling, key)
+				return remove(nextSibling, key, cmp)
 
 			} else { // merge
 				merge(node, idx)
-				return remove(node.siblings[idx], key)
+				return remove(node.siblings[idx], key, cmp)
 			}
 
 		}
@@ -284,7 +286,7 @@ func remove(node *BTreeNode, key []byte) bool {
 				sibling.num++
 				prev.num--
 
-				return remove(sibling, key)
+				return remove(sibling, key, cmp)
 
 			} else if next != nil && next.num > next.degree-1 {
 				// sibling borrow next
@@ -312,23 +314,23 @@ func remove(node *BTreeNode, key []byte) bool {
 				sibling.num++
 				next.num--
 
-				return remove(sibling, key)
+				return remove(sibling, key, cmp)
 
 			} else {
 
 				if prev != nil {
 					// merge prev
 					merge(node, idx-1)
-					return remove(node.siblings[idx-1], key)
+					return remove(node.siblings[idx-1], key, cmp)
 				} else {
 					// merge next
 					merge(node, idx)
-					return remove(node.siblings[idx], key)
+					return remove(node.siblings[idx], key, cmp)
 				}
 			}
 
 		} else {
-			return remove(sibling, key)
+			return remove(sibling, key, cmp)
 		}
 
 	}
@@ -365,17 +367,17 @@ func (btree *BTree) Get(key []byte) ([]byte, bool) {
 	if btree.root == nil {
 		return nil, false
 	}
-	return get(btree.root, key)
+	return get(btree.root, key, btree.cmp)
 }
 
-func get(node *BTreeNode, key []byte) ([]byte, bool) {
+func get(node *BTreeNode, key []byte, cmp BasicComparer) ([]byte, bool) {
 	idx := sort.Search(node.num, func(i int) bool {
-		return bytes.Compare(node.keys[i], key) >= 0
+		return cmp.Compare(node.keys[i], key) >= 0
 	})
 
 	var found bool
 
-	if idx < node.num && bytes.Compare(node.keys[idx], key) == 0 {
+	if idx < node.num && cmp.Compare(node.keys[idx], key) == 0 {
 		found = true
 	}
 
@@ -387,7 +389,7 @@ func get(node *BTreeNode, key []byte) ([]byte, bool) {
 		return nil, false
 	}
 
-	return get(node.siblings[idx], key)
+	return get(node.siblings[idx], key, cmp)
 
 }
 
@@ -395,17 +397,17 @@ func (btree *BTree) Has(key []byte) bool {
 	if btree.root == nil {
 		return false
 	}
-	return has(btree.root, key)
+	return has(btree.root, key, btree.cmp)
 }
 
-func has(node *BTreeNode, key []byte) bool {
+func has(node *BTreeNode, key []byte, cmp BasicComparer) bool {
 	idx := sort.Search(node.num, func(i int) bool {
-		return bytes.Compare(node.keys[i], key) >= 0
+		return cmp.Compare(node.keys[i], key) >= 0
 	})
 
 	var found bool
 
-	if idx < node.num && bytes.Compare(node.keys[idx], key) == 0 {
+	if idx < node.num && cmp.Compare(node.keys[idx], key) == 0 {
 		found = true
 	}
 
@@ -417,7 +419,7 @@ func has(node *BTreeNode, key []byte) bool {
 		return false
 	}
 
-	return has(node.siblings[idx], key)
+	return has(node.siblings[idx], key, cmp)
 
 }
 
@@ -520,11 +522,11 @@ func (iter *BTreeIter) Seek(key []byte) bool {
 	iter.stack = iter.stack[:0]
 
 	node := iter.root
-
+	cmp := iter.BTree.cmp
 	for {
 
 		idx := sort.Search(node.num, func(i int) bool {
-			return bytes.Compare(node.keys[i], key) >= 0
+			return cmp.Compare(node.keys[i], key) >= 0
 		})
 
 		if node.isLeaf && idx == node.num {
@@ -538,7 +540,7 @@ func (iter *BTreeIter) Seek(key []byte) bool {
 		})
 
 		// found case
-		if idx < node.num && bytes.Compare(node.keys[idx], key) == 0 {
+		if idx < node.num && cmp.Compare(node.keys[idx], key) == 0 {
 			return iter.next()
 		}
 
