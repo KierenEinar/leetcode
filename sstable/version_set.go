@@ -8,11 +8,19 @@ import (
 )
 
 type VersionSet struct {
-	mutex       sync.RWMutex
 	versions    *list.List
 	current     *Version
 	compactPtrs [kLevelNum]compactPtr
 	cmp         *iComparer
+
+	nextFileNum uint64
+	logNum      uint64
+	seqNum      uint64
+
+	manifestFd     Fd
+	manifestWriter Writer // lazy init
+
+	storage Storage
 }
 
 type Version struct {
@@ -284,4 +292,9 @@ func (set *anySortedSet) contains(item interface{}) bool {
 		panic("anySortedSet contains item encode failed, please check...")
 	}
 	return set.Has(key)
+}
+
+// LogAndApply must be hold by the mutex
+func (vSet *VersionSet) LogAndApply(edit *VersionEdit, mutex *sync.Mutex) {
+	assertMutexHeld(mutex)
 }
