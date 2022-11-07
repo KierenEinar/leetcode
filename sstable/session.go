@@ -317,14 +317,12 @@ func (session *Session) logAndApply(edit *VersionEdit, fillSessionByEdit bool) e
 	*/
 	if fillSessionByEdit {
 		if edit.hasRec(kSeqNum) {
-			if session.stSeqNum < edit.lastSeq {
-				session.stSeqNum = edit.lastSeq
-			}
+			assert(edit.lastSeq >= session.stSeqNum)
+			session.stSeqNum = edit.lastSeq
 		}
 		if edit.hasRec(kLogNum) {
-			if session.stJournalNum < edit.logNum {
-				session.stJournalNum = edit.logNum
-			}
+			assert(edit.logNum >= session.stJournalNum)
+			session.stJournalNum = edit.logNum
 		}
 	}
 
@@ -357,6 +355,7 @@ func (session *Session) logAndApply(edit *VersionEdit, fillSessionByEdit bool) e
 		if err == nil {
 			session.manifestFd = manifestFd
 			session.manifestWriter = manifestWriter
+			err = storage.SetCurrent(manifestFd)
 		}
 	}
 
