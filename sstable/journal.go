@@ -46,6 +46,14 @@ type JournalWriter struct {
 	blockOffset int
 }
 
+func NewJournalWriter(writer Writer) *JournalWriter {
+	return &JournalWriter{
+		dest: &writableFile{
+			w: writer,
+		},
+	}
+}
+
 func (jw *JournalWriter) Write(chunk []byte) (n int, err error) {
 
 	if jw.err != nil {

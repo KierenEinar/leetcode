@@ -19,6 +19,7 @@ const journalBlockHeaderLen = 7
 const kJournalBlockSize = 1 << 15
 const kWritableBufferSize = 1 << 16
 const kLevelNum = 7
+const kManifestSizeThreshold = 1 << 26 // 64m
 
 var (
 	kMaxNumBytes = make([]byte, 8)
@@ -106,26 +107,15 @@ func (sf tFiles) size() (size int) {
 
 type Levels []tFiles
 
-type FileMeta struct {
-	NextSequence   uint64
-	Levels         Levels
-	NextFileNum    uint64
-	CompactPtrs    []InternalKey // 合并的指针
-	BestCScore     float64       // 最佳合并层的分数
-	BestCLevel     int           // 最佳合并层的
-	Storage        Storage
-	tableOperation *tableOperation
+func (session *Session) allocFileNum() uint64 {
+	return atomic.AddUint64(&session.stNextFileNum, 1)
 }
 
-func (fileMeta *FileMeta) allocFileNum() uint64 {
-	return atomic.AddUint64(&fileMeta.NextFileNum, 1)
-}
-
-func (fileMeta *FileMeta) loadCompactPtr(level int) InternalKey {
-	if level < len(fileMeta.CompactPtrs) {
+func (session *Session) loadCompactPtr(level int) InternalKey {
+	if level < len(session.compactPtrs) {
 		return nil
 	}
-	return fileMeta.CompactPtrs[level]
+	return session.compactPtrs[level].ikey
 }
 
 func (s tFile) isOverlapped(umin []byte, umax []byte) bool {
@@ -207,19 +197,19 @@ func (s tFiles) getOverlapped(imin InternalKey, imax InternalKey, overlapped boo
 }
 
 // todo finish it
-func (fileMeta *FileMeta) createNewTable(fd Fd, fileSize int) (*TableWriter, error) {
+func (session *Session) createNewTable(fd Fd, fileSize int) (*TableWriter, error) {
 	return nil, nil
 }
 
 type tableOperation struct {
-	fileMeta *FileMeta
-	storage  Storage
+	session *Session
+	storage Storage
 }
 
-func newTableOperation(s Storage, meta *FileMeta) *tableOperation {
+func newTableOperation(s Storage, meta *Session) *tableOperation {
 	return &tableOperation{
-		fileMeta: meta,
-		storage:  s,
+		session: meta,
+		storage: s,
 	}
 }
 
@@ -240,7 +230,7 @@ func (tableOperation *tableOperation) newIterator(f tFile) (Iterator, error) {
 }
 
 func (tableOperation *tableOperation) create() (*tWriter, error) {
-	fd := Fd{Num: tableOperation.fileMeta.allocFileNum(), FileType: SSTable}
+	fd := Fd{Num: tableOperation.session.allocFileNum(), FileType: SSTable}
 	w, err := tableOperation.storage.Create(fd)
 	if err != nil {
 		return nil, err

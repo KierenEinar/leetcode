@@ -7,7 +7,7 @@ import (
 
 const mutexLocked = 1
 
-func assertMutexHeld(mutex *sync.Mutex) bool {
+func assertMutexHeld(mutex *sync.Mutex) {
 	state := reflect.ValueOf(mutex).FieldByName("state")
 	ok := state.Int()&mutexLocked == mutexLocked
 	if !ok {

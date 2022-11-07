@@ -1,26 +1,28 @@
 package sstable
 
 import (
-	"container/list"
 	"encoding/binary"
 	"sort"
 	"sync"
 )
 
-type VersionSet struct {
-	versions    *list.List
+type Session struct {
+	vmu         sync.Mutex
 	current     *Version
 	compactPtrs [kLevelNum]compactPtr
 	cmp         *iComparer
 
-	nextFileNum uint64
-	logNum      uint64
-	seqNum      uint64
+	stNextFileNum uint64
+	stJournalNum  uint64
+	stSeqNum      uint64
 
 	manifestFd     Fd
-	manifestWriter Writer // lazy init
+	manifestWriter *JournalWriter // lazy init
 
 	storage Storage
+
+	bestCompactionLevel int
+	bestCompactionScore float64
 }
 
 type Version struct {
@@ -32,16 +34,16 @@ type Version struct {
 }
 
 type vBuilder struct {
-	vSet     *VersionSet
+	session  *Session
 	base     *Version
 	inserted [kLevelNum]*tFileSortedSet
 	deleted  [kLevelNum]*uintSortedSet
 }
 
-func newBuilder(vSet *VersionSet, base *Version) *vBuilder {
+func newBuilder(session *Session, base *Version) *vBuilder {
 	builder := &vBuilder{
-		vSet: vSet,
-		base: base,
+		session: session,
+		base:    base,
 	}
 	for i := 0; i < kLevelNum; i++ {
 		builder.inserted[i] = newTFileSortedSet()
@@ -54,7 +56,7 @@ func newBuilder(vSet *VersionSet, base *Version) *vBuilder {
 
 func (builder *vBuilder) apply(edit VersionEdit) {
 	for level, cPtr := range edit.compactPtrs {
-		builder.vSet.compactPtrs[level] = cPtr
+		builder.session.compactPtrs[level] = cPtr
 	}
 	for _, delTable := range edit.delTables {
 		level, number := delTable.level, delTable.number
@@ -120,7 +122,7 @@ func (builder *vBuilder) maybeAddFile(v *Version, file tFile, level int) {
 	}
 
 	files := v.levels[level]
-	cmp := builder.vSet.cmp
+	cmp := builder.session.cmp
 	if level > 0 && len(files) > 0 {
 		assert(cmp.Compare(files[len(files)-1].iMax, file.iMin) < 0)
 	}
@@ -294,7 +296,58 @@ func (set *anySortedSet) contains(item interface{}) bool {
 	return set.Has(key)
 }
 
-// LogAndApply must be hold by the mutex
-func (vSet *VersionSet) LogAndApply(edit *VersionEdit, mutex *sync.Mutex) {
-	assertMutexHeld(mutex)
+// LogAndApply apply a new version and record change into manifest file
+// required: must be hold by the mutex
+func (session *Session) LogAndApply(edit *VersionEdit) {
+
+	// apply new version
+	v := &Version{}
+	builder := newBuilder(session, session.current)
+	builder.apply(*edit)
+	builder.saveTo(v)
+
+	var (
+		newManifest       bool // need to new manifest file ?
+		newManifestFd     Fd
+		newManifestWriter *JournalWriter
+		err               error // any err during this phase
+		writer            Writer
+		storage           = session.storage
+	)
+
+	if session.manifestWriter == nil {
+		newManifest = true
+	}
+
+	if session.manifestWriter.Size() >= kManifestSizeThreshold {
+		newManifest = true
+		session.manifestFd = Fd{
+			FileType: Manifest,
+			Num:      session.stNextFileNum,
+		}
+		session.stNextFileNum++
+		edit.nextFileNum = session.stNextFileNum
+	}
+
+	// only compaction will
+	if newManifest {
+		writer, err = storage.Create(session.manifestFd)
+		if err == nil {
+			newManifestWriter = NewJournalWriter(writer)
+			err = session.writeSnapShot(newManifestWriter) // write current version into new manifest file
+		}
+	}
+
+	if err == nil {
+		edit.EncodeTo(vSet.manifestWriter)
+		err = edit.err
+	}
+
+	if err == nil {
+		vSet.appendVersion(v) // install new version
+	} else {
+		// do something rollback
+
+	}
+
 }

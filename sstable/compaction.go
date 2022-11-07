@@ -54,13 +54,14 @@ type Compaction struct {
 	tWriter        *tWriter
 }
 
-func (fileMeta *FileMeta) pickCompaction() *Compaction {
-	inputLevel := fileMeta.BestCLevel
-	cPtr := fileMeta.loadCompactPtr(inputLevel)
+// required: must held vmutex
+func (session *Session) pickCompaction() *Compaction {
+	inputLevel := session.bestCompactionLevel
+	cPtr := session.loadCompactPtr(inputLevel)
 
 	var s0 tFiles
 
-	level := fileMeta.Levels[inputLevel]
+	level := session.current.levels[inputLevel]
 
 	if cPtr != nil && inputLevel > 0 { // only level [1,n] can find the compact ptr
 
@@ -76,20 +77,23 @@ func (fileMeta *FileMeta) pickCompaction() *Compaction {
 		s0 = append(s0, level[0])
 	}
 
-	return newCompaction(inputLevel, s0, fileMeta.Levels, fileMeta.tableOperation)
+	return newCompaction(inputLevel, s0, session.current.levels, session.tableOperation)
 
 }
 
-func (fileMeta *FileMeta) finishCompactionOutputFile(tableWriter *TableWriter) error {
+func (session *Session) finishCompactionOutputFile(tableWriter *TableWriter) error {
 	return nil
 }
 
-func (fileMeta *FileMeta) doCompaction(compaction *Compaction) error {
+func (session *Session) doCompaction(compaction *Compaction) error {
 
 	if len(compaction.tFiles[0]) == 1 &&
 		len(compaction.tFiles[1]) == 0 &&
 		len(compaction.gp) <= defaultGPOverlappedLimit {
 		// just update the manifest
+		edit := VersionEdit{}
+		tFile := compaction.tFiles[0][0]
+		edit.addNewTable(0, tFile.Size, tFile.fd.Num, tFile.iMin, tFile.iMax)
 
 	}
 

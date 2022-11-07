@@ -102,7 +102,7 @@ func (edit *VersionEdit) addNewTable(level, size int, fileNumber uint64, imin, i
 	})
 }
 
-func (edit *VersionEdit) EncodeTo(dest Writer) {
+func (edit *VersionEdit) EncodeTo(dest io.Writer) {
 	switch {
 	case edit.hasRec(kComparerName):
 		edit.writeHeader(dest, kComparerName)
@@ -233,23 +233,23 @@ func (edit *VersionEdit) readHeader(src Reader) int {
 	return edit.readVarInt(src)
 }
 
-func (edit *VersionEdit) writeHeader(w Writer, typ int) {
+func (edit *VersionEdit) writeHeader(w io.Writer, typ int) {
 	edit.putVarInt(w, typ)
 }
 
-func (edit *VersionEdit) writeBytes(w Writer, value []byte) {
+func (edit *VersionEdit) writeBytes(w io.Writer, value []byte) {
 	size := len(value)
 	edit.putVarInt(w, size)
 	_, edit.err = w.Write(value)
 }
 
-func (edit *VersionEdit) putVarInt(w Writer, value int) {
+func (edit *VersionEdit) putVarInt(w io.Writer, value int) {
 	x := binary.PutVarint(edit.scratch[:], int64(value))
 	_, edit.err = w.Write(edit.scratch[:x])
 	return
 }
 
-func (edit *VersionEdit) putUVarInt(w Writer, value uint64) {
+func (edit *VersionEdit) putUVarInt(w io.Writer, value uint64) {
 	x := binary.PutUvarint(edit.scratch[:], value)
 	_, edit.err = w.Write(edit.scratch[:x])
 	return
