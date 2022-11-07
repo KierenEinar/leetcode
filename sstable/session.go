@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"sort"
 	"sync"
+	"sync/atomic"
 )
 
 type Session struct {
@@ -20,9 +21,6 @@ type Session struct {
 	manifestWriter *JournalWriter // lazy init
 
 	storage Storage
-
-	bestCompactionLevel int
-	bestCompactionScore float64
 }
 
 type Version struct {
@@ -297,8 +295,38 @@ func (set *anySortedSet) contains(item interface{}) bool {
 }
 
 // LogAndApply apply a new version and record change into manifest file
-// required: must be hold by the mutex
-func (session *Session) LogAndApply(edit *VersionEdit) {
+// noted: thread not safe
+// caller should hold a mutex
+func (session *Session) logAndApply(edit *VersionEdit, fillSessionByEdit bool) error {
+
+	/**
+	case 1: compactMemtable
+		edit.setReq(db.frozenSeqNum)
+		edit.setJournalNum(db.journal.Fd)
+		edit.addTable(xx)
+
+	case 2:
+		table compaction:
+			edit.addTable(xx)
+			edit.delTable(xx)
+
+	conclusion: all compaction need to be serialize execute.
+	but minor compaction, only affect level 0 and is add file. major compaction not affect minor compaction.
+	so we can let mem compact and table compact concurrently execute. when install new version, we need a lock
+	to protect.
+	*/
+	if fillSessionByEdit {
+		if edit.hasRec(kSeqNum) {
+			if session.stSeqNum < edit.lastSeq {
+				session.stSeqNum = edit.lastSeq
+			}
+		}
+		if edit.hasRec(kLogNum) {
+			if session.stJournalNum < edit.logNum {
+				session.stJournalNum = edit.logNum
+			}
+		}
+	}
 
 	// apply new version
 	v := &Version{}
@@ -307,47 +335,55 @@ func (session *Session) LogAndApply(edit *VersionEdit) {
 	builder.saveTo(v)
 
 	var (
-		newManifest       bool // need to new manifest file ?
-		newManifestFd     Fd
-		newManifestWriter *JournalWriter
-		err               error // any err during this phase
-		writer            Writer
-		storage           = session.storage
+		writer         Writer
+		storage        = session.storage
+		manifestWriter = session.manifestWriter
+		manifestFd     = session.manifestFd
+		err            error
 	)
 
-	if session.manifestWriter == nil {
-		newManifest = true
-	}
-
-	if session.manifestWriter.Size() >= kManifestSizeThreshold {
-		newManifest = true
-		session.manifestFd = Fd{
-			FileType: Manifest,
-			Num:      session.stNextFileNum,
+	if manifestWriter == nil || manifestWriter.size() >= kManifestSizeThreshold {
+		if manifestWriter.size() >= kManifestSizeThreshold {
+			manifestFd = Fd{
+				FileType: Journal,
+				Num:      session.allocFileNum(),
+			}
 		}
-		session.stNextFileNum++
-		edit.nextFileNum = session.stNextFileNum
-	}
-
-	// only compaction will
-	if newManifest {
-		writer, err = storage.Create(session.manifestFd)
+		writer, err = storage.Create(manifestFd)
 		if err == nil {
-			newManifestWriter = NewJournalWriter(writer)
-			err = session.writeSnapShot(newManifestWriter) // write current version into new manifest file
+			manifestWriter = NewJournalWriter(writer)
+			err = session.writeSnapShot(manifestWriter) // write current version snapshot into manifest
+		}
+		if err == nil {
+			session.manifestFd = manifestFd
+			session.manifestWriter = manifestWriter
 		}
 	}
 
 	if err == nil {
-		edit.EncodeTo(vSet.manifestWriter)
+		edit.setNextFile(session.allocFileNum())
+		edit.EncodeTo(manifestWriter)
 		err = edit.err
 	}
 
 	if err == nil {
-		vSet.appendVersion(v) // install new version
+		session.setVersion(v)
 	} else {
 		// do something rollback
 
 	}
 
+	return err
+}
+
+func (session *Session) version() *Version {
+	session.vmu.Lock()
+	defer session.vmu.Unlock()
+	v := session.current
+	v.Ref()
+	return v
+}
+
+func (session *Session) nextFileNum() uint64 {
+	return atomic.LoadUint64(&session.stNextFileNum)
 }
