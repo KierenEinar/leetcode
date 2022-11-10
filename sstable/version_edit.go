@@ -7,7 +7,7 @@ import (
 
 const (
 	kComparerName = iota + 1
-	kLogNum
+	kJournalNum
 	kNextFileNum
 	kSeqNum
 	kCompact
@@ -19,7 +19,7 @@ type VersionEdit struct {
 	scratch      [binary.MaxVarintLen64]byte
 	rec          uint64
 	comparerName []byte
-	logNum       uint64
+	journalNum   uint64
 	nextFileNum  uint64
 	lastSeq      sequence
 	compactPtrs  []compactPtr
@@ -61,8 +61,8 @@ func (edit *VersionEdit) setCompareName(cmpName []byte) {
 }
 
 func (edit *VersionEdit) setLogNum(logNum uint64) {
-	edit.setRec(kLogNum)
-	edit.logNum = logNum
+	edit.setRec(kJournalNum)
+	edit.journalNum = logNum
 }
 
 func (edit *VersionEdit) setNextFile(nextFileNum uint64) {
@@ -108,9 +108,9 @@ func (edit *VersionEdit) EncodeTo(dest io.Writer) {
 		edit.writeHeader(dest, kComparerName)
 		edit.writeBytes(dest, edit.comparerName)
 		fallthrough
-	case edit.hasRec(kLogNum):
-		edit.writeHeader(dest, kLogNum)
-		edit.putUVarInt(dest, edit.logNum)
+	case edit.hasRec(kJournalNum):
+		edit.writeHeader(dest, kJournalNum)
+		edit.putUVarInt(dest, edit.journalNum)
 		fallthrough
 	case edit.hasRec(kNextFileNum):
 		edit.writeHeader(dest, kNextFileNum)
@@ -176,12 +176,12 @@ func (edit *VersionEdit) DecodeFrom(src Reader) {
 				return
 			}
 			edit.nextFileNum = nextFileNum
-		case kLogNum:
+		case kJournalNum:
 			logNum := edit.readUVarInt(src)
 			if edit.err != nil {
 				return
 			}
-			edit.logNum = logNum
+			edit.journalNum = logNum
 		case kSeqNum:
 			seqNum := edit.readUVarInt(src)
 			if edit.err != nil {

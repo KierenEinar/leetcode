@@ -10,5 +10,6 @@ type DB struct {
 	mutex      sync.Mutex
 	VersionSet *VersionSet
 
-	seqNum sequence
+	seqNum     sequence
+	journalNum uint64
 }

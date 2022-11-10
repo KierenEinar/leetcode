@@ -14,7 +14,7 @@ type VersionSet struct {
 	cmp         *iComparer
 
 	nextFileNum    uint64
-	journalNum     uint64
+	stJournalNum   uint64
 	stSeqNum       sequence // current memtable start seq num
 	manifestFd     Fd
 	manifestWriter *JournalWriter // lazy init
@@ -297,7 +297,7 @@ func (set *anySortedSet) contains(item interface{}) bool {
 // LogAndApply apply a new version and record change into manifest file
 // noted: thread not safe
 // caller should hold a mutex
-func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.Mutex, vFillBasicField bool) error {
+func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.Mutex) error {
 
 	assertMutexHeld(mutex)
 
@@ -317,11 +317,20 @@ func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.Mutex, 
 	so we can let mem compact and table compact concurrently execute. when install new version, we need a lock
 	to protect.
 	*/
-	if vFillBasicField {
-		edit.nextFileNum = versionSet.nextFileNum
-		edit.lastSeq = versionSet.stSeqNum
-		edit.logNum = versionSet.journalNum
+	if edit.hasRec(kJournalNum) {
+		assert(edit.journalNum >= versionSet.stJournalNum)
+		assert(edit.journalNum < versionSet.nextFileNum)
+	} else {
+		edit.journalNum = versionSet.stJournalNum
 	}
+
+	if edit.hasRec(kSeqNum) {
+		assert(edit.lastSeq >= versionSet.stSeqNum)
+	} else {
+		edit.lastSeq = versionSet.stSeqNum
+	}
+
+	edit.setNextFile(versionSet.nextFileNum)
 
 	// apply new version
 	v := &Version{}
@@ -335,43 +344,53 @@ func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.Mutex, 
 		storage        = versionSet.storage
 		manifestWriter = versionSet.manifestWriter
 		manifestFd     = versionSet.manifestFd
+		newManifest    bool
 		err            error
 	)
 
 	if manifestWriter == nil || manifestWriter.size() >= kManifestSizeThreshold {
+		newManifest = true
 		if manifestWriter.size() >= kManifestSizeThreshold {
 			manifestFd = Fd{
 				FileType: Journal,
 				Num:      versionSet.allocFileNum(),
 			}
 		}
+	}
+
+	mutex.Unlock() // cause compaction is run in single thread, so we can avoid expensive write syscall
+
+	if newManifest {
 		writer, err = storage.Create(manifestFd)
 		if err == nil {
 			manifestWriter = NewJournalWriter(writer)
 			err = versionSet.writeSnapShot(manifestWriter) // write current version snapshot into manifest
 		}
+	}
+
+	if err == nil {
+		edit.EncodeTo(manifestWriter)
+		err = edit.err
+	}
+
+	if err == nil {
+		err = storage.SetCurrent(manifestFd)
 		if err == nil {
 			versionSet.manifestFd = manifestFd
 			versionSet.manifestWriter = manifestWriter
-			err = storage.SetCurrent(manifestFd)
 		}
-	}
-
-	mutex.Unlock() // cause compaction is run in single thread, so we can avoid expensive write syscall
-
-	if err == nil {
-		edit.setNextFile(versionSet.nextFileNum)
-		edit.EncodeTo(manifestWriter)
-		err = edit.err
 	}
 
 	mutex.Lock()
 
 	if err == nil {
 		versionSet.appendVersion(v)
+		versionSet.stSeqNum = edit.lastSeq
+		versionSet.stJournalNum = edit.journalNum
 	} else {
-		// do something rollback
-
+		if newManifest {
+			err = storage.Remove(manifestFd)
+		}
 	}
 
 	return err
