@@ -5,21 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"sort"
-	"sync/atomic"
 )
-
-const kMaxSequenceNum = (uint64(1) << 56) - 1
-const kMaxNum = kMaxSequenceNum | uint64(keyTypeValue)
-
-var magicByte = []byte("\x57\xfb\x80\x8b\x24\x75\x47\xdb")
-
-const blockTailLen = 5
-const tableFooterLen = 48
-const journalBlockHeaderLen = 7
-const kJournalBlockSize = 1 << 15
-const kWritableBufferSize = 1 << 16
-const kLevelNum = 7
-const kManifestSizeThreshold = 1 << 26 // 64m
 
 var (
 	kMaxNumBytes = make([]byte, 8)
@@ -107,15 +93,17 @@ func (sf tFiles) size() (size int) {
 
 type Levels []tFiles
 
-func (session *Session) allocFileNum() uint64 {
-	return atomic.AddUint64(&session.stNextFileNum, 1)
+func (versionSet *VersionSet) allocFileNum() uint64 {
+	nextFileNum := versionSet.nextFileNum
+	versionSet.nextFileNum++
+	return nextFileNum
 }
 
-func (session *Session) loadCompactPtr(level int) InternalKey {
-	if level < len(session.compactPtrs) {
+func (versionSet *VersionSet) loadCompactPtr(level int) InternalKey {
+	if level < len(versionSet.compactPtrs) {
 		return nil
 	}
-	return session.compactPtrs[level].ikey
+	return versionSet.compactPtrs[level].ikey
 }
 
 func (s tFile) isOverlapped(umin []byte, umax []byte) bool {
@@ -197,16 +185,16 @@ func (s tFiles) getOverlapped(imin InternalKey, imax InternalKey, overlapped boo
 }
 
 // todo finish it
-func (session *Session) createNewTable(fd Fd, fileSize int) (*TableWriter, error) {
+func (versionSet *VersionSet) createNewTable(fd Fd, fileSize int) (*TableWriter, error) {
 	return nil, nil
 }
 
 type tableOperation struct {
-	session *Session
+	session *VersionSet
 	storage Storage
 }
 
-func newTableOperation(s Storage, meta *Session) *tableOperation {
+func newTableOperation(s Storage, meta *VersionSet) *tableOperation {
 	return &tableOperation{
 		session: meta,
 		storage: s,

@@ -1,22 +1,21 @@
 package sstable
 
 import (
+	"container/list"
 	"encoding/binary"
 	"sort"
 	"sync"
-	"sync/atomic"
 )
 
-type Session struct {
-	vmu         sync.Mutex
+type VersionSet struct {
+	versions    *list.List
 	current     *Version
 	compactPtrs [kLevelNum]compactPtr
 	cmp         *iComparer
 
-	stNextFileNum uint64
-	stJournalNum  uint64
-	stSeqNum      uint64
-
+	nextFileNum    uint64
+	journalNum     uint64
+	stSeqNum       sequence // current memtable start seq num
 	manifestFd     Fd
 	manifestWriter *JournalWriter // lazy init
 
@@ -26,19 +25,20 @@ type Session struct {
 type Version struct {
 	*BasicReleaser
 	levels [kLevelNum]tFiles
+
 	// compaction
-	cScore int
+	cScore float64
 	cLevel int
 }
 
 type vBuilder struct {
-	session  *Session
+	session  *VersionSet
 	base     *Version
 	inserted [kLevelNum]*tFileSortedSet
 	deleted  [kLevelNum]*uintSortedSet
 }
 
-func newBuilder(session *Session, base *Version) *vBuilder {
+func newBuilder(session *VersionSet, base *Version) *vBuilder {
 	builder := &vBuilder{
 		session: session,
 		base:    base,
@@ -297,7 +297,9 @@ func (set *anySortedSet) contains(item interface{}) bool {
 // LogAndApply apply a new version and record change into manifest file
 // noted: thread not safe
 // caller should hold a mutex
-func (session *Session) logAndApply(edit *VersionEdit, fillSessionByEdit bool) error {
+func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.Mutex, vFillBasicField bool) error {
+
+	assertMutexHeld(mutex)
 
 	/**
 	case 1: compactMemtable
@@ -315,28 +317,24 @@ func (session *Session) logAndApply(edit *VersionEdit, fillSessionByEdit bool) e
 	so we can let mem compact and table compact concurrently execute. when install new version, we need a lock
 	to protect.
 	*/
-	if fillSessionByEdit {
-		if edit.hasRec(kSeqNum) {
-			assert(edit.lastSeq >= session.stSeqNum)
-			session.stSeqNum = edit.lastSeq
-		}
-		if edit.hasRec(kLogNum) {
-			assert(edit.logNum >= session.stJournalNum)
-			session.stJournalNum = edit.logNum
-		}
+	if vFillBasicField {
+		edit.nextFileNum = versionSet.nextFileNum
+		edit.lastSeq = versionSet.stSeqNum
+		edit.logNum = versionSet.journalNum
 	}
 
 	// apply new version
 	v := &Version{}
-	builder := newBuilder(session, session.current)
+	builder := newBuilder(versionSet, versionSet.current)
 	builder.apply(*edit)
 	builder.saveTo(v)
+	finalize(v)
 
 	var (
 		writer         Writer
-		storage        = session.storage
-		manifestWriter = session.manifestWriter
-		manifestFd     = session.manifestFd
+		storage        = versionSet.storage
+		manifestWriter = versionSet.manifestWriter
+		manifestFd     = versionSet.manifestFd
 		err            error
 	)
 
@@ -344,29 +342,33 @@ func (session *Session) logAndApply(edit *VersionEdit, fillSessionByEdit bool) e
 		if manifestWriter.size() >= kManifestSizeThreshold {
 			manifestFd = Fd{
 				FileType: Journal,
-				Num:      session.allocFileNum(),
+				Num:      versionSet.allocFileNum(),
 			}
 		}
 		writer, err = storage.Create(manifestFd)
 		if err == nil {
 			manifestWriter = NewJournalWriter(writer)
-			err = session.writeSnapShot(manifestWriter) // write current version snapshot into manifest
+			err = versionSet.writeSnapShot(manifestWriter) // write current version snapshot into manifest
 		}
 		if err == nil {
-			session.manifestFd = manifestFd
-			session.manifestWriter = manifestWriter
+			versionSet.manifestFd = manifestFd
+			versionSet.manifestWriter = manifestWriter
 			err = storage.SetCurrent(manifestFd)
 		}
 	}
 
+	mutex.Unlock() // cause compaction is run in single thread, so we can avoid expensive write syscall
+
 	if err == nil {
-		edit.setNextFile(session.allocFileNum())
+		edit.setNextFile(versionSet.nextFileNum)
 		edit.EncodeTo(manifestWriter)
 		err = edit.err
 	}
 
+	mutex.Lock()
+
 	if err == nil {
-		session.setVersion(v)
+		versionSet.appendVersion(v)
 	} else {
 		// do something rollback
 
@@ -375,14 +377,42 @@ func (session *Session) logAndApply(edit *VersionEdit, fillSessionByEdit bool) e
 	return err
 }
 
-func (session *Session) version() *Version {
-	session.vmu.Lock()
-	defer session.vmu.Unlock()
-	v := session.current
-	v.Ref()
-	return v
+// required: mutex held
+// noted: thread not safe
+func (versionSet *VersionSet) appendVersion(v *Version) {
+	versionSet.versions.PushFront(v)
+	old := versionSet.current
+	old.UnRef()
+	versionSet.current = v
+	versionSet.current.Ref()
 }
 
-func (session *Session) nextFileNum() uint64 {
-	return atomic.LoadUint64(&session.stNextFileNum)
+func finalize(v *Version) {
+
+	var (
+		bestLevel int
+		bestScore float64
+	)
+
+	for level := 0; level < len(v.levels); level++ {
+		if level == 0 {
+			length := len(v.levels[level])
+			bestScore = float64(length) / kLevel0StopWriteTrigger
+			if bestScore > 1.0 {
+				bestLevel = 0
+			}
+		} else {
+			totalSize := uint64(v.levels[level].size())
+			score := float64(totalSize / maxBytesForLevel(level))
+			if score > bestScore {
+				bestScore = score
+				bestLevel = level
+			}
+		}
+	}
+
+	if bestScore > 1.0 {
+		v.cScore = bestScore
+		v.cLevel = bestLevel
+	}
 }

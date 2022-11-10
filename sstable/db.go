@@ -1,7 +1,14 @@
 package sstable
 
-import "sync"
+import (
+	"sync"
+)
+
+type sequence uint64
 
 type DB struct {
-	mutex sync.Mutex
+	mutex      sync.Mutex
+	VersionSet *VersionSet
+
+	seqNum sequence
 }
