@@ -339,6 +339,8 @@ func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.Mutex) 
 	builder.saveTo(v)
 	finalize(v)
 
+	mutex.Unlock() // cause compaction is run in single thread, so we can avoid expensive write syscall
+
 	var (
 		writer         Writer
 		storage        = versionSet.storage
@@ -357,8 +359,6 @@ func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.Mutex) 
 			}
 		}
 	}
-
-	mutex.Unlock() // cause compaction is run in single thread, so we can avoid expensive write syscall
 
 	if newManifest {
 		writer, err = storage.Create(manifestFd)
