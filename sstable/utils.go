@@ -6,4 +6,4 @@ import (
 
 const mutexLocked = 1
 
-func assertMutexHeld(mutex *sync.Mutex) {}
+func assertMutexHeld(mutex *sync.RWMutex) {}

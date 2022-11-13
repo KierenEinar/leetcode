@@ -21,7 +21,7 @@ type VersionEdit struct {
 	comparerName []byte
 	journalNum   uint64
 	nextFileNum  uint64
-	lastSeq      sequence
+	lastSeq      Sequence
 	compactPtrs  []compactPtr
 	delTables    []delTable
 	addedTables  []addTable
@@ -70,7 +70,7 @@ func (edit *VersionEdit) setNextFile(nextFileNum uint64) {
 	edit.nextFileNum = nextFileNum
 }
 
-func (edit *VersionEdit) setLastSeq(seq sequence) {
+func (edit *VersionEdit) setLastSeq(seq Sequence) {
 	edit.setRec(kSeqNum)
 	edit.lastSeq = seq
 }
@@ -187,7 +187,7 @@ func (edit *VersionEdit) DecodeFrom(src Reader) {
 			if edit.err != nil {
 				return
 			}
-			edit.lastSeq = sequence(seqNum)
+			edit.lastSeq = Sequence(seqNum)
 		case kCompact:
 			level := edit.readVarInt(src)
 			ikey := edit.readBytes(src)

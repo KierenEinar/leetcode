@@ -23,4 +23,5 @@ var (
 	ErrReleased                 = errors.New("leveldb released")
 	ErrJournalSkipped           = errors.New("leveldb/journal skipped")
 	ErrMissingChunk             = errors.New("leveldb/journal chunk miss")
+	ErrClosed                   = errors.New("leveldb/closed")
 )

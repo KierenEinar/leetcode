@@ -1,5 +1,6 @@
 package sstable
 
+import "C"
 import (
 	"container/list"
 	"encoding/binary"
@@ -15,7 +16,7 @@ type VersionSet struct {
 
 	nextFileNum    uint64
 	stJournalNum   uint64
-	stSeqNum       sequence // current memtable start seq num
+	stSeqNum       Sequence // current memtable start seq num
 	manifestFd     Fd
 	manifestWriter *JournalWriter // lazy init
 
@@ -297,7 +298,7 @@ func (set *anySortedSet) contains(item interface{}) bool {
 // LogAndApply apply a new version and record change into manifest file
 // noted: thread not safe
 // caller should hold a mutex
-func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.Mutex) error {
+func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.RWMutex) error {
 
 	assertMutexHeld(mutex)
 
@@ -350,13 +351,15 @@ func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.Mutex) 
 		err            error
 	)
 
-	if manifestWriter == nil || manifestWriter.size() >= kManifestSizeThreshold {
+	if manifestWriter == nil {
 		newManifest = true
-		if manifestWriter.size() >= kManifestSizeThreshold {
-			manifestFd = Fd{
-				FileType: Journal,
-				Num:      versionSet.allocFileNum(),
-			}
+	}
+
+	if manifestWriter != nil && manifestWriter.size() >= kManifestSizeThreshold {
+		newManifest = true
+		manifestFd = Fd{
+			FileType: Journal,
+			Num:      versionSet.allocFileNum(),
 		}
 	}
 
@@ -417,9 +420,7 @@ func finalize(v *Version) {
 		if level == 0 {
 			length := len(v.levels[level])
 			bestScore = float64(length) / kLevel0StopWriteTrigger
-			if bestScore > 1.0 {
-				bestLevel = 0
-			}
+			bestLevel = 0
 		} else {
 			totalSize := uint64(v.levels[level].size())
 			score := float64(totalSize / maxBytesForLevel(level))
@@ -430,8 +431,6 @@ func finalize(v *Version) {
 		}
 	}
 
-	if bestScore > 1.0 {
-		v.cScore = bestScore
-		v.cLevel = bestLevel
-	}
+	v.cScore = bestScore
+	v.cLevel = bestLevel
 }
