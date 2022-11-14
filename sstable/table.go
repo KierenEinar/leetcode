@@ -99,6 +99,14 @@ func (versionSet *VersionSet) allocFileNum() uint64 {
 	return nextFileNum
 }
 
+func (versionSet *VersionSet) reuseFileNum(fileNum uint64) bool {
+	if versionSet.nextFileNum-1 == fileNum {
+		versionSet.nextFileNum = fileNum
+		return true
+	}
+	return false
+}
+
 func (versionSet *VersionSet) loadCompactPtr(level int) InternalKey {
 	if level < len(versionSet.compactPtrs) {
 		return nil

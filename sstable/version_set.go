@@ -434,3 +434,10 @@ func finalize(v *Version) {
 	v.cScore = bestScore
 	v.cLevel = bestLevel
 }
+
+func (versionSet *VersionSet) levelFilesNum(level int) int {
+	c := versionSet.current
+	c.Ref()
+	defer c.UnRef()
+	return len(c.levels[level])
+}

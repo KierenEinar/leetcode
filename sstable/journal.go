@@ -145,6 +145,10 @@ func (jw *JournalWriter) writePhysicalRecord(data []byte, chunkType byte) error 
 	return jw.dest.flush()
 }
 
+func (jw *JournalWriter) Close() error {
+	return jw.dest.Close()
+}
+
 type writableFile struct {
 	w   Writer
 	pos int
@@ -192,6 +196,10 @@ func (w *writableFile) flush() error {
 		return err
 	}
 	return nil
+}
+
+func (w *writableFile) Close() error {
+	return w.w.Close()
 }
 
 // JournalReader journal reader

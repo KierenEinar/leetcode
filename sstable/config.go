@@ -14,6 +14,7 @@ const kLevelNum = 7
 const kLevel0SlowDownTrigger = 8
 const kLevel0StopWriteTrigger = 12
 const kManifestSizeThreshold = 1 << 26 // 64m
+const kMemTableWriteBufferSize = 1 << 22
 
 const kLevel1SizeThreshold = 10 * (1 << 20) //10m
 const kWriteBatchHeaderSize = 12            // first 8 bytes represent sequence, last 4 bytes represent batch count

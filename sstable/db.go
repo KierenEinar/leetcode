@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type Sequence uint64
@@ -33,6 +34,9 @@ type DB struct {
 	scratchBatch *WriteBatch
 
 	writers *list.List
+
+	// atomic state
+	hasImm uint32
 }
 
 func (db *DB) write(batch *WriteBatch) error {
@@ -109,6 +113,53 @@ func (db *DB) write(batch *WriteBatch) error {
 }
 
 func (db *DB) makeRoomForWrite() error {
+
+	assertMutexHeld(&db.rwMutex)
+	allowDelay := true
+
+	for {
+		if db.bgErr != nil {
+			return db.bgErr
+		} else if allowDelay && db.VersionSet.levelFilesNum(0) >= kLevel0SlowDownTrigger {
+			allowDelay = false
+			db.rwMutex.Unlock()
+			time.Sleep(time.Microsecond * 1000)
+			db.rwMutex.Lock()
+		} else if db.mem.ApproximateSize() <= kMemTableWriteBufferSize {
+			break
+		} else if db.immu != nil { // wait background compaction compact imm table
+			db.backgroundWorkFinishedSignal.Wait()
+		} else if db.VersionSet.levelFilesNum(0) >= kLevel0StopWriteTrigger {
+			db.backgroundWorkFinishedSignal.Wait()
+		} else {
+
+			db.frozenSeq = db.seqNum
+			db.frozenJournalFd = db.journalFd
+
+			journalFd := Fd{
+				FileType: Journal,
+				Num:      db.VersionSet.allocFileNum(),
+			}
+			stor := db.VersionSet.storage
+			writer, err := stor.Create(journalFd)
+			if err == nil {
+				_ = db.journalWriter.Close()
+				db.journalFd = journalFd
+				db.journalWriter = NewJournalWriter(writer)
+				immu := db.immu
+				immu.UnRef()
+				db.immu = db.mem
+				atomic.StoreUint32(&db.hasImm, 1)
+				db.mem = NewMemTable()
+
+			} else {
+				db.VersionSet.reuseFileNum(journalFd.Num)
+				return err
+			}
+			db.MaybeScheduleCompaction()
+		}
+	}
+
 	return nil
 }
 
