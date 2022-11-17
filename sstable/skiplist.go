@@ -74,7 +74,7 @@ func (skl *SkipList) Put(key, value []byte) {
 	}
 
 	// update forward
-	updateNextLevel0 := updates[0].next(0)
+	updateNextLevel0 := newNode.next(0)
 	if updateNextLevel0 != nil {
 		updateNextLevel0.backward = newNode
 	} else {
