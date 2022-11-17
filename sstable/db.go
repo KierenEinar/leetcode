@@ -15,7 +15,7 @@ type DB struct {
 
 	journalWriter *JournalWriter
 
-	closed uint32
+	shutdown uint32
 
 	// these state are protect by mutex
 	seqNum    Sequence
@@ -24,10 +24,12 @@ type DB struct {
 	frozenSeq       Sequence
 	frozenJournalFd Fd
 
-	mem  *MemTable
-	immu *MemTable
+	mem *MemTable
+	imm *MemTable
 
 	backgroundWorkFinishedSignal *sync.Cond
+
+	backgroundCompactionScheduled bool
 
 	bgErr error
 
@@ -41,7 +43,7 @@ type DB struct {
 
 func (db *DB) write(batch *WriteBatch) error {
 
-	if atomic.LoadUint32(&db.closed) == 1 {
+	if atomic.LoadUint32(&db.shutdown) == 1 {
 		return ErrClosed
 	}
 
@@ -69,19 +71,24 @@ func (db *DB) write(batch *WriteBatch) error {
 	lastSequence := db.seqNum
 
 	if err == nil {
-		db.mergeWriteBatch(batch, &lastWriter)
-		db.scratchBatch.SetSequence(lastSequence)
+		newWriteBatch := db.mergeWriteBatch(&lastWriter) // write into scratchbatch
+		db.scratchBatch.SetSequence(lastSequence + 1)
 		lastSequence += Sequence(db.scratchBatch.Len())
 		mem := db.mem
 		mem.Ref()
 		db.rwMutex.Unlock()
 		// expensive syscall need to unlock !!!
-		_, err = db.journalWriter.Write(db.scratchBatch.Contents())
-		db.rwMutex.Lock()
+		_, err = db.journalWriter.Write(newWriteBatch.Contents())
 		if err == nil {
-			db.writeMem(mem, db.scratchBatch)
-			db.scratchBatch.Reset()
+			db.writeMem(mem, newWriteBatch)
+			db.rwMutex.Lock()
+			if newWriteBatch == db.scratchBatch {
+				db.scratchBatch.Reset()
+			}
 			db.seqNum = lastSequence
+		} else {
+			db.recordBackgroundError(err)
+			return err
 		}
 
 		ready := db.writers.Front()
@@ -127,7 +134,7 @@ func (db *DB) makeRoomForWrite() error {
 			db.rwMutex.Lock()
 		} else if db.mem.ApproximateSize() <= kMemTableWriteBufferSize {
 			break
-		} else if db.immu != nil { // wait background compaction compact imm table
+		} else if db.imm != nil { // wait background compaction compact imm table
 			db.backgroundWorkFinishedSignal.Wait()
 		} else if db.VersionSet.levelFilesNum(0) >= kLevel0StopWriteTrigger {
 			db.backgroundWorkFinishedSignal.Wait()
@@ -146,12 +153,12 @@ func (db *DB) makeRoomForWrite() error {
 				_ = db.journalWriter.Close()
 				db.journalFd = journalFd
 				db.journalWriter = NewJournalWriter(writer)
-				immu := db.immu
+				immu := db.imm
 				immu.UnRef()
-				db.immu = db.mem
+				db.imm = db.mem
 				atomic.StoreUint32(&db.hasImm, 1)
 				db.mem = NewMemTable()
-
+				db.mem.Ref()
 			} else {
 				db.VersionSet.reuseFileNum(journalFd.Num)
 				return err
@@ -163,31 +170,111 @@ func (db *DB) makeRoomForWrite() error {
 	return nil
 }
 
-func (db *DB) mergeWriteBatch(batch *WriteBatch, lastWriter **writer) {
+func (db *DB) mergeWriteBatch(lastWriter **writer) *WriteBatch {
 
 	assertMutexHeld(&db.rwMutex)
 
 	assert(db.writers.Len() > 0)
 
-	maxSize := 1 << 20       // 1m
-	if batch.Len() < 1<<17 { // limit the growth while in small write
-		maxSize = 1 << 17
+	front := db.writers.Front()
+	firstBatch := front.Value.(*writer).batch
+	size := firstBatch.Size()
+
+	maxSize := 1 << 20  // 1m
+	if size < 128<<10 { // limit the growth while in small write
+		maxSize = size + 128<<10
 	}
 
-	maxSize = batch.Size() + maxSize
-	w := db.writers.Front()
-
-	for {
+	result := firstBatch
+	w := front.Next()
+	for w != nil {
 		wr := w.Value.(*writer)
-		if db.scratchBatch.Size()+wr.batch.Size() > maxSize {
+		if size+wr.batch.Size() > maxSize {
 			break
 		}
+		if result == firstBatch {
+			result = db.scratchBatch
+			result.append(firstBatch)
+		}
+		result.append(wr.batch)
 		lastWriter = &wr
-		db.scratchBatch.append(wr.batch)
 		w = w.Next()
-		if w == nil {
-			break
-		}
 	}
+
+	return result
+
+}
+
+func (db *DB) recordBackgroundError(err error) {
+	if db.bgErr == nil {
+		db.bgErr = err
+		db.backgroundWorkFinishedSignal.Broadcast()
+	}
+}
+
+// MaybeScheduleCompaction required mutex held
+func (db *DB) MaybeScheduleCompaction() {
+	assertMutexHeld(&db.rwMutex)
+
+	if db.backgroundCompactionScheduled {
+		// do nothing
+	} else if db.bgErr != nil {
+		// do nothing
+	} else if atomic.LoadUint32(&db.shutdown) == 1 {
+		// do nothing
+	} else if atomic.LoadUint32(&db.hasImm) == 0 && !db.VersionSet.needCompaction() {
+		// do nothing
+	} else {
+		go db.backgroundCall()
+	}
+
+}
+
+func (db *DB) backgroundCall() {
+
+	db.rwMutex.Lock()
+
+	assert(db.backgroundCompactionScheduled)
+
+	if db.bgErr != nil {
+		// do nothing
+	} else if atomic.LoadUint32(&db.shutdown) == 1 {
+		// do nothing
+	} else {
+		db.backgroundCompaction()
+	}
+
+	db.backgroundCompactionScheduled = false
+	db.MaybeScheduleCompaction()
+	db.rwMutex.Unlock()
+
+	db.backgroundWorkFinishedSignal.Broadcast()
+
+}
+
+func (db *DB) backgroundCompaction() {
+	assertMutexHeld(&db.rwMutex)
+
+	if db.imm != nil {
+		db.compactMemTable()
+		return
+	}
+
+}
+
+func (db *DB) compactMemTable() {
+
+	assertMutexHeld(&db.rwMutex)
+	assert(db.imm != nil)
+
+	edit := &VersionEdit{}
+	base := db.VersionSet.current
+	base.Ref()
+	err := db.writeLevel0Table(db.imm, edit, base)
+	base.UnRef()
+
+}
+
+func (db *DB) writeLevel0Table(mem *MemTable, edit *VersionEdit, base *Version) error {
 
 }
