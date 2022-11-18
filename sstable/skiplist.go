@@ -131,6 +131,34 @@ func (skl *SkipList) Del(key []byte) bool {
 	return true
 }
 
+func (skl *SkipList) Get(key []byte) ([]byte, error) {
+	n := skl.dummyHead
+	var (
+		hitLevel int8 = -1
+	)
+	for i := skl.level - 1; i >= 0; i-- {
+		for ; n.next(i) != nil && bytes.Compare(n.next(i).key, key) < 0; n = n.next(i) {
+		}
+		if n.next(i) != nil && bytes.Compare(n.next(i).key, key) == 0 {
+			hitLevel = i
+			break
+		}
+	}
+	if hitLevel > 0 {
+		return nil, ErrNotFound
+	}
+	return n.next(hitLevel).value, nil
+}
+
+func (skl *SkipList) FindGreaterOrEqual(key []byte) (*skipListNode, error) {
+	levels := skl.findLT(key)
+	node := levels[0].next(0)
+	if node == nil {
+		return nil, ErrNotFound
+	}
+	return node, nil
+}
+
 func (skl *SkipList) findLT(key []byte) [kMaxHeight]*skipListNode {
 
 	updates := [kMaxHeight]*skipListNode{}
