@@ -13,6 +13,7 @@ const (
 )
 
 type SkipList struct {
+	*BasicReleaser
 	level     int8
 	rand      *rand.Rand
 	seed      int64
@@ -24,11 +25,17 @@ type SkipList struct {
 }
 
 func NewSkipList(seed int64) *SkipList {
-	return &SkipList{
+	skl := &SkipList{
 		rand:      rand.New(rand.NewSource(seed)),
 		seed:      seed,
 		dummyHead: &skipListNode{},
 	}
+	skl.OnClose = skl.close
+	return skl
+}
+
+func (skl *SkipList) close() {
+
 }
 
 func (skl *SkipList) Put(key, value []byte) {
@@ -161,6 +168,87 @@ func (skl *SkipList) FindGreaterOrEqual(key []byte) (*skipListNode, bool) {
 	return nil, false
 }
 
+// NewIterator return an iter
+// caller should call UnRef after iterate end
+func (skl *SkipList) NewIterator() Iterator {
+	skl.Ref()
+	sklIter := &SkipListIter{
+		skl: skl,
+	}
+	sklIter.OnClose = func() {
+		skl.UnRef()
+	}
+	return sklIter
+}
+
+type SkipListIter struct {
+	skl *SkipList
+	n   *skipListNode
+	dir direction
+	Iterator
+	*BasicReleaser
+}
+
+func (sklIter *SkipListIter) SeekFirst() bool {
+	sklIter.n = sklIter.skl.dummyHead
+	sklIter.dir = dirSOI
+	return sklIter.Next()
+}
+
+func (sklIter *SkipListIter) Next() bool {
+
+	if sklIter.dir == dirSOI {
+		return false
+	}
+
+	if sklIter.n == nil {
+		return sklIter.SeekFirst()
+	}
+
+	n := sklIter.n.next(0)
+	if n == nil {
+		sklIter.dir = dirEOI
+		return false
+	}
+	sklIter.dir = dirForward
+	sklIter.n = n
+	return true
+}
+
+func (sklIter *SkipListIter) Valid() error {
+	if sklIter.released {
+		return ErrReleased
+	}
+	return nil
+}
+
+func (sklIter *SkipListIter) Seek(key InternalKey) bool {
+
+	skl := sklIter.skl
+	node, _ := skl.FindGreaterOrEqual(key)
+	if node == nil {
+		sklIter.dir = dirEOI
+		return false
+	}
+	sklIter.n = node
+	sklIter.dir = dirForward
+	return true
+}
+
+func (sklIter *SkipListIter) Key() []byte {
+	if sklIter.n == nil {
+		return nil
+	}
+	return sklIter.n.key
+}
+
+func (sklIter *SkipListIter) Value() []byte {
+	if sklIter.n == nil {
+		return nil
+	}
+	return sklIter.n.value
+}
+
 func (skl *SkipList) findLT(key []byte) [kMaxHeight]*skipListNode {
 
 	updates := [kMaxHeight]*skipListNode{}
@@ -188,7 +276,9 @@ func (node *skipListNode) setNext(i int8, n *skipListNode) {
 	assert(i < node.level.maxLevel)
 	next := node.level.next[i]
 	node.level.next[i] = n
-	n.level.next[i] = next
+	if n != nil {
+		n.level.next[i] = next
+	}
 }
 
 func (node *skipListNode) next(i int8) *skipListNode {
