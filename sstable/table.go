@@ -229,6 +229,7 @@ func (tableOperation *tableOperation) create() (*tWriter, error) {
 	fd := Fd{Num: tableOperation.session.allocFileNum(), FileType: SSTable}
 	w, err := tableOperation.storage.Create(fd)
 	if err != nil {
+		tableOperation.session.reuseFileNum(fd.Num)
 		return nil, err
 	}
 	return &tWriter{

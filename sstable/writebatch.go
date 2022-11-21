@@ -1,51 +1,55 @@
 package sstable
 
 import (
-	"bytes"
 	"encoding/binary"
 	"sync"
 )
 
 type WriteBatch struct {
+	seq     Sequence
 	count   int
-	header  [kWriteBatchHeaderSize]byte
 	scratch [binary.MaxVarintLen64]byte
-	rep     bytes.Buffer
+	rep     []byte
 }
 
 func (wb *WriteBatch) Put(key, value []byte) {
 
+	if wb.count == 0 {
+		wb.rep = make([]byte, kWriteBatchHeaderSize) // init header
+	}
+
 	wb.count++
-	wb.rep.WriteByte(kTypeValue)
+	wb.rep = append(wb.rep, kTypeValue)
 	n := binary.PutUvarint(wb.scratch[:], uint64(len(key)))
-	wb.rep.Write(wb.scratch[:n])
-	wb.rep.Write(key)
+	wb.rep = append(wb.rep, wb.scratch[:n]...)
+	wb.rep = append(wb.rep, key...)
 
 	n = binary.PutUvarint(wb.scratch[:], uint64(len(value)))
-	wb.rep.Write(wb.scratch[:n])
-	wb.rep.Write(value)
+	wb.rep = append(wb.rep, wb.scratch[:n]...)
+	wb.rep = append(wb.rep, value...)
 }
 
-func (wb *WriteBatch) Delete(key InternalKey) {
+func (wb *WriteBatch) Delete(key []byte) {
 	wb.count++
-	wb.rep.WriteByte(kTypeDel)
+	wb.rep = append(wb.rep, kTypeDel)
 	n := binary.PutUvarint(wb.scratch[:], uint64(len(key)))
-	wb.rep.Write(wb.scratch[:n])
-	wb.rep.Write(key)
+	wb.rep = append(wb.rep, wb.scratch[:n]...)
+	wb.rep = append(wb.rep, key...)
 }
 
 func (wb *WriteBatch) SetSequence(seq Sequence) {
-	binary.LittleEndian.PutUint64(wb.header[:8], uint64(seq))
+	wb.seq = seq
+	binary.LittleEndian.PutUint64(wb.rep[:8], uint64(seq))
 }
 
 func (wb *WriteBatch) Contents() []byte {
-	binary.LittleEndian.PutUint32(wb.header[8:], uint32(wb.count))
-	return append(wb.header[:], wb.rep.Bytes()...)
+	binary.LittleEndian.PutUint32(wb.rep[8:], uint32(wb.count))
+	return wb.rep[:]
 }
 
 func (wb *WriteBatch) Reset() {
 	wb.count = 0
-	wb.rep.Reset()
+	wb.rep = nil
 }
 
 func (wb *WriteBatch) Len() int {
@@ -53,13 +57,16 @@ func (wb *WriteBatch) Len() int {
 }
 
 func (wb *WriteBatch) Size() int {
-	return wb.rep.Len() + len(wb.header)
+	return len(wb.rep)
+}
+
+func (wb *WriteBatch) Capacity() int {
+	return cap(wb.rep)
 }
 
 func (dst *WriteBatch) append(src *WriteBatch) {
 	dst.count += src.count
-	dst.rep.Grow(src.rep.Len() - kWriteBatchHeaderSize)
-	dst.rep.Write(src.rep.Bytes()[kWriteBatchHeaderSize:])
+	dst.rep = append(dst.rep, src.rep...)
 }
 
 type writer struct {

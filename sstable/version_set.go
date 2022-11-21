@@ -54,8 +54,8 @@ func newBuilder(session *VersionSet, base *Version) *vBuilder {
 }
 
 func (builder *vBuilder) apply(edit VersionEdit) {
-	for level, cPtr := range edit.compactPtrs {
-		builder.session.compactPtrs[level] = cPtr
+	for _, cPtr := range edit.compactPtrs {
+		builder.session.compactPtrs[cPtr.level] = cPtr
 	}
 	for _, delTable := range edit.delTables {
 		level, number := delTable.level, delTable.number
@@ -80,7 +80,7 @@ func (builder *vBuilder) saveTo(v *Version) {
 			if !ok {
 				panic("vBuilder iter convert value to tFile failed...")
 			}
-			pos := upperBound(baseFile, level, iter, builder.vSet.cmp)
+			pos := upperBound(baseFile, level, iter, builder.session.cmp)
 			for i := beginPos; i < pos; i++ {
 				builder.maybeAddFile(v, baseFile[i], level)
 			}

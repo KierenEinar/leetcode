@@ -2,6 +2,7 @@ package sstable
 
 import (
 	"container/list"
+	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,6 +40,8 @@ type DB struct {
 
 	// atomic state
 	hasImm uint32
+
+	tableOperation *tableOperation
 }
 
 func (db *DB) write(batch *WriteBatch) error {
@@ -80,7 +83,11 @@ func (db *DB) write(batch *WriteBatch) error {
 		// expensive syscall need to unlock !!!
 		_, err = db.journalWriter.Write(newWriteBatch.Contents())
 		if err == nil {
-			db.writeMem(mem, newWriteBatch)
+			err = db.writeMem(mem, newWriteBatch)
+			if err != nil {
+				return err
+			}
+
 			db.rwMutex.Lock()
 			if newWriteBatch == db.scratchBatch {
 				db.scratchBatch.Reset()
@@ -119,6 +126,64 @@ func (db *DB) write(batch *WriteBatch) error {
 	return err
 }
 
+func (db *DB) writeMem(mem *MemDB, batch *WriteBatch) error {
+
+	seq := batch.seq
+	idx := 0
+
+	reqLen := len(batch.rep)
+
+	for i := 0; i < batch.count; i++ {
+		c := batch.rep[idx]
+		idx += 1
+		assert(idx < reqLen)
+		kLen, n := binary.Uvarint(batch.rep[idx:])
+		idx += n
+
+		assert(idx < reqLen)
+		var (
+			key []byte
+			val []byte
+		)
+
+		switch c {
+		case kTypeValue:
+			vLen, n := binary.Uvarint(batch.rep[idx:])
+			idx += n
+			assert(idx < reqLen)
+
+			key = batch.rep[idx : idx+int(kLen)]
+			idx += int(kLen)
+
+			val = batch.rep[idx : idx+int(vLen)]
+			idx += int(vLen)
+			assert(idx < reqLen)
+
+			err := mem.Put(key, seq+Sequence(i), val)
+			if err != nil {
+				return err
+			}
+
+		case kTypeDel:
+			key = batch.rep[idx : idx+int(kLen)]
+			idx += int(kLen)
+			assert(idx < reqLen)
+
+			err := mem.Del(key, seq+Sequence(i))
+			if err != nil {
+				return err
+			}
+
+		default:
+			panic("invalid key type support")
+		}
+
+	}
+
+	return nil
+
+}
+
 func (db *DB) makeRoomForWrite() error {
 
 	assertMutexHeld(&db.rwMutex)
@@ -140,9 +205,6 @@ func (db *DB) makeRoomForWrite() error {
 			db.backgroundWorkFinishedSignal.Wait()
 		} else {
 
-			db.frozenSeq = db.seqNum
-			db.frozenJournalFd = db.journalFd
-
 			journalFd := Fd{
 				FileType: Journal,
 				Num:      db.VersionSet.allocFileNum(),
@@ -151,14 +213,17 @@ func (db *DB) makeRoomForWrite() error {
 			writer, err := stor.Create(journalFd)
 			if err == nil {
 				_ = db.journalWriter.Close()
+				db.frozenSeq = db.seqNum
+				db.frozenJournalFd = db.journalFd
 				db.journalFd = journalFd
 				db.journalWriter = NewJournalWriter(writer)
-				immu := db.imm
-				immu.UnRef()
+				imm := db.imm
+				imm.UnRef()
 				db.imm = db.mem
 				atomic.StoreUint32(&db.hasImm, 1)
-				db.mem = NewMemTable()
-				db.mem.Ref()
+				mem := NewMemTable(kMemTableWriteBufferSize, db.VersionSet.cmp)
+				mem.Ref()
+				db.mem = mem
 			} else {
 				db.VersionSet.reuseFileNum(journalFd.Num)
 				return err
@@ -268,13 +333,45 @@ func (db *DB) compactMemTable() {
 	assert(db.imm != nil)
 
 	edit := &VersionEdit{}
-	base := db.VersionSet.current
-	base.Ref()
-	err := db.writeLevel0Table(db.imm, edit, base)
-	base.UnRef()
+	err := db.writeLevel0Table(db.imm, edit)
+	if err == nil {
+
+		db.removeObseleteFile()
+	}
 
 }
 
-func (db *DB) writeLevel0Table(mem *MemDB, edit *VersionEdit, base *Version) error {
+func (db *DB) writeLevel0Table(memDb *MemDB, edit *VersionEdit) (err error) {
+	assertMutexHeld(&db.rwMutex)
+	db.rwMutex.Unlock()
 
+	tWriter, err := db.tableOperation.create()
+	if err != nil {
+		db.rwMutex.Lock()
+		return err
+	}
+
+	iter := memDb.NewIterator()
+	defer iter.UnRef()
+
+	for iter.Next() {
+		err = tWriter.append(iter.Key(), iter.Value())
+		if err != nil {
+			db.rwMutex.Lock()
+			return err
+		}
+	}
+
+	tFile, err := tWriter.finish()
+	if err != nil {
+		db.rwMutex.Lock()
+		return err
+	}
+
+	db.rwMutex.Lock()
+	edit.addNewTable(0, tFile.Size, tFile.fd.Num, tFile.iMin, tFile.iMax)
+	edit.setLogNum(db.frozenJournalFd.Num)
+	edit.setLastSeq(db.frozenSeq)
+	err = db.VersionSet.logAndApply(edit, &db.rwMutex)
+	return
 }
