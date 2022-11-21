@@ -335,10 +335,14 @@ func (db *DB) compactMemTable() {
 	edit := &VersionEdit{}
 	err := db.writeLevel0Table(db.imm, edit)
 	if err == nil {
-
+		imm := db.imm
+		db.imm = nil
+		imm.UnRef()
+		atomic.StoreUint32(&db.hasImm, 1)
 		db.removeObseleteFile()
+	} else {
+		db.bgErr = err
 	}
-
 }
 
 func (db *DB) writeLevel0Table(memDb *MemDB, edit *VersionEdit) (err error) {
