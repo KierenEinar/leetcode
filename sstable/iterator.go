@@ -64,11 +64,11 @@ type Releaser interface {
 }
 
 type BasicReleaser struct {
-	released bool
-	ref      int32
-	OnClose  func()
-	OnRef    func()
-	OnUnRef  func()
+	release uint32
+	ref     int32
+	OnClose func()
+	OnRef   func()
+	OnUnRef func()
 }
 
 func (br *BasicReleaser) Ref() int32 {
@@ -88,11 +88,15 @@ func (br *BasicReleaser) UnRef() int32 {
 	}
 	if newInt32 == 0 {
 		if br.OnClose != nil {
-			br.released = true
+			atomic.StoreUint32(&br.release, 1)
 			br.OnClose()
 		}
 	}
 	return newInt32
+}
+
+func (br *BasicReleaser) released() bool {
+	return atomic.LoadUint32(&br.release) == 1
 }
 
 type indexedIterator struct {
@@ -133,7 +137,7 @@ func (iter *indexedIterator) Next() bool {
 		return false
 	}
 
-	if iter.released {
+	if iter.released() {
 		iter.err = ErrReleased
 		return false
 	}
@@ -158,7 +162,7 @@ func (iter *indexedIterator) SeekFirst() bool {
 		return false
 	}
 
-	if iter.released {
+	if iter.released() {
 		iter.err = ErrReleased
 		return false
 	}
@@ -177,7 +181,7 @@ func (iter *indexedIterator) Seek(key InternalKey) bool {
 		return false
 	}
 
-	if iter.released {
+	if iter.released() {
 		iter.err = ErrReleased
 		return false
 	}
@@ -256,7 +260,7 @@ func (mi *MergeIterator) SeekFirst() bool {
 		return false
 	}
 
-	if mi.released {
+	if mi.released() {
 		mi.err = ErrReleased
 		return false
 	}
@@ -284,7 +288,7 @@ func (mi *MergeIterator) Next() bool {
 		return false
 	}
 
-	if mi.released {
+	if mi.released() {
 		mi.err = ErrReleased
 		return false
 	}
@@ -306,7 +310,7 @@ func (mi *MergeIterator) Seek(ikey InternalKey) bool {
 	if mi.err != nil {
 		return false
 	}
-	if mi.released {
+	if mi.released() {
 		mi.err = ErrReleased
 		return false
 	}
@@ -396,7 +400,7 @@ func (indexer *tFileArrIteratorIndexer) Next() bool {
 	if indexer.err != nil {
 		return false
 	}
-	if indexer.released {
+	if indexer.released() {
 		indexer.err = ErrReleased
 		return false
 	}
@@ -427,7 +431,7 @@ func (indexer *tFileArrIteratorIndexer) SeekFirst() bool {
 	if indexer.err != nil {
 		return false
 	}
-	if indexer.released {
+	if indexer.released() {
 		indexer.err = ErrReleased
 		return false
 	}
@@ -440,7 +444,7 @@ func (indexer *tFileArrIteratorIndexer) Seek(ikey InternalKey) bool {
 	if indexer.err != nil {
 		return false
 	}
-	if indexer.released {
+	if indexer.released() {
 		indexer.err = ErrReleased
 		return false
 	}

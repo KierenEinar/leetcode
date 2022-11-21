@@ -24,8 +24,8 @@ type DB struct {
 	frozenSeq       Sequence
 	frozenJournalFd Fd
 
-	mem *MemTable
-	imm *MemTable
+	mem *MemDB
+	imm *MemDB
 
 	backgroundWorkFinishedSignal *sync.Cond
 
@@ -275,6 +275,6 @@ func (db *DB) compactMemTable() {
 
 }
 
-func (db *DB) writeLevel0Table(mem *MemTable, edit *VersionEdit, base *Version) error {
+func (db *DB) writeLevel0Table(mem *MemDB, edit *VersionEdit, base *Version) error {
 
 }

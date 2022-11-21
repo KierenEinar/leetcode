@@ -18,10 +18,10 @@ const (
 	defaultDataBlockSize = 1 << 11 // 2k
 )
 
-func buildInternalKey(dst, uKey []byte, kt keyType, sequence uint64) InternalKey {
+func buildInternalKey(dst, uKey []byte, kt keyType, sequence Sequence) InternalKey {
 	dst = ensureBuffer(dst, len(dst)+8)
 	n := copy(dst, uKey)
-	binary.LittleEndian.PutUint64(dst[n:], (sequence<<8)|uint64(kt))
+	binary.LittleEndian.PutUint64(dst[n:], (uint64(sequence)<<8)|uint64(kt))
 	return dst
 }
 
