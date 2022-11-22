@@ -91,7 +91,7 @@ func (sf tFiles) size() (size int) {
 	return
 }
 
-type Levels []tFiles
+type Levels [kLevelNum]tFiles
 
 func (versionSet *VersionSet) allocFileNum() uint64 {
 	nextFileNum := versionSet.nextFileNum
