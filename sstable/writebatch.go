@@ -10,13 +10,14 @@ type WriteBatch struct {
 	count   int
 	scratch [binary.MaxVarintLen64]byte
 	rep     []byte
+	once    sync.Once
 }
 
 func (wb *WriteBatch) Put(key, value []byte) {
 
-	if wb.count == 0 {
-		wb.rep = make([]byte, kWriteBatchHeaderSize) // init header
-	}
+	wb.once.Do(func() {
+		wb.rep = make([]byte, kWriteBatchHeaderSize)
+	})
 
 	wb.count++
 	wb.rep = append(wb.rep, kTypeValue)
@@ -49,7 +50,7 @@ func (wb *WriteBatch) Contents() []byte {
 
 func (wb *WriteBatch) Reset() {
 	wb.count = 0
-	wb.rep = nil
+	wb.rep = wb.rep[:kWriteBatchHeaderSize] // resize to header
 }
 
 func (wb *WriteBatch) Len() int {

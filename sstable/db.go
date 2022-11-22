@@ -81,21 +81,20 @@ func (db *DB) write(batch *WriteBatch) error {
 		mem.Ref()
 		db.rwMutex.Unlock()
 		// expensive syscall need to unlock !!!
-		_, err = db.journalWriter.Write(newWriteBatch.Contents())
-		if err == nil {
+		_, syncErr := db.journalWriter.Write(newWriteBatch.Contents())
+		if syncErr == nil {
 			err = db.writeMem(mem, newWriteBatch)
-			if err != nil {
-				return err
-			}
+		}
 
-			db.rwMutex.Lock()
-			if newWriteBatch == db.scratchBatch {
-				db.scratchBatch.Reset()
-			}
-			db.seqNum = lastSequence
-		} else {
-			db.recordBackgroundError(err)
-			return err
+		db.rwMutex.Lock()
+		db.seqNum = lastSequence
+
+		if syncErr != nil {
+			db.recordBackgroundError(syncErr)
+		}
+
+		if newWriteBatch == db.scratchBatch {
+			db.scratchBatch.Reset()
 		}
 
 		ready := db.writers.Front()
