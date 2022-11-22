@@ -103,6 +103,37 @@ func (tFiles tFiles) getOverlapped1(dst tFiles, imin InternalKey, imax InternalK
 		}
 	} else {
 
+		var (
+			begin int
+			end   int
+		)
+
+		idx := sort.Search(len(tFiles), func(i int) bool {
+			return bytes.Compare(tFiles[i].iMin.ukey(), umin) <= 0
+		})
+
+		if idx == 0 {
+			begin = 0
+		} else if idx < len(tFiles) && bytes.Compare(tFiles[idx].iMax.ukey(), umin) <= 0 {
+			begin -= 1
+		} else {
+			begin = idx
+		}
+
+		idx = sort.Search(len(tFiles), func(i int) bool {
+			return bytes.Compare(tFiles[i].iMax.ukey(), umax) >= 0
+		})
+
+		if idx == len(tFiles) {
+			end = idx
+		} else if idx < len(tFiles) && bytes.Compare(tFiles[idx].iMin.ukey(), umax) <= 0 {
+			end = idx + 1
+		} else {
+			end = idx
+		}
+
+		assert(end >= begin)
+		dst = append(dst, tFiles[begin:end]...)
 	}
 
 }
