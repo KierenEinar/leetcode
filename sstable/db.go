@@ -100,16 +100,15 @@ func (db *DB) write(batch *WriteBatch) error {
 		ready := db.writers.Front()
 		for {
 			readyW := ready.Value.(*writer)
-			if readyW.batch == batch {
-				err = readyW.err
+			if readyW != lastWriter {
+				readyW.done = true
+				readyW.err = err
+				readyW.cv.Signal()
 			}
 			db.writers.Remove(ready)
 			if readyW == lastWriter {
 				break
 			}
-			readyW.done = true
-			readyW.err = err
-			readyW.cv.Signal()
 			ready = ready.Next()
 		}
 
@@ -338,7 +337,7 @@ func (db *DB) compactMemTable() {
 		db.imm = nil
 		imm.UnRef()
 		atomic.StoreUint32(&db.hasImm, 1)
-		db.removeObseleteFile()
+		db.removeObsoleteFile()
 	} else {
 		db.bgErr = err
 	}
