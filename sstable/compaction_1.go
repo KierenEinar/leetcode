@@ -9,6 +9,8 @@ type compaction1 struct {
 	inputs [2]tFiles
 	levels Levels
 
+	version *Version
+
 	cPtr compactPtr
 
 	// compaction grandparent level
@@ -49,13 +51,14 @@ func (vSet *VersionSet) pickCompaction1() *compaction1 {
 		inputs = append(inputs, level[0])
 	}
 
-	return newCompaction1(inputs, cPtr, vSet.current.levels, vSet.cmp)
+	return newCompaction1(inputs, cPtr, vSet.current, vSet.current.levels, vSet.cmp)
 }
 
-func newCompaction1(inputs tFiles, cPtr compactPtr, levels Levels, cmp BasicComparer) *compaction1 {
-
+func newCompaction1(inputs tFiles, cPtr compactPtr, version *Version, levels Levels, cmp BasicComparer) *compaction1 {
+	version.Ref()
 	c := &compaction1{
 		inputs:            [2]tFiles{inputs},
+		version:           version,
 		levels:            levels,
 		cPtr:              cPtr,
 		cmp:               cmp,

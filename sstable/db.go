@@ -323,9 +323,20 @@ func (db *DB) backgroundCompaction() {
 		return
 	}
 
-	c := db.VersionSet.pickCompaction()
+	c := db.VersionSet.pickCompaction1()
 	if c == nil {
 		return
+	} else if len(c.inputs[0]) == 1 && len(c.inputs[1]) == 0 && c.gp.size() <= defaultCompactionTableSize*defaultGPOverlappedLimit {
+
+		edit := &VersionEdit{}
+		addTable := c.inputs[0][0]
+		edit.addNewTable(c.cPtr.level+1, addTable.Size, addTable.fd.Num, addTable.iMin, addTable.iMax)
+		err := db.VersionSet.logAndApply(edit, &db.rwMutex)
+		if err != nil {
+			db.recordBackgroundError(err)
+		}
+	} else {
+
 	}
 
 }
