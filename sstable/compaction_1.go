@@ -55,10 +55,11 @@ func (vSet *VersionSet) pickCompaction1() *compaction1 {
 func newCompaction1(inputs tFiles, cPtr compactPtr, levels Levels, cmp BasicComparer) *compaction1 {
 
 	c := &compaction1{
-		inputs: [2]tFiles{inputs},
-		levels: levels,
-		cPtr:   cPtr,
-		cmp:    cmp,
+		inputs:            [2]tFiles{inputs},
+		levels:            levels,
+		cPtr:              cPtr,
+		cmp:               cmp,
+		gpOverlappedLimit: defaultGPOverlappedLimit,
 	}
 	c.expand()
 	return c
@@ -79,6 +80,29 @@ func (c *compaction1) expand() {
 	}
 
 	vs1.getOverlapped1(&t1, imin, imax, false)
+
+	imin, imax = append(t0, t1...).getRange1(c.cmp)
+	var tmpT0 tFiles
+	vs0.getOverlapped1(&tmpT0, imin, imax, c.cPtr.level == 0)
+
+	// see if we can expand the input 0 level file
+	if len(tmpT0) > len(t0) {
+		amin, amax := append(tmpT0, t1...).getRange1(c.cmp)
+		var tmpT1 tFiles
+		vs1.getOverlapped1(&tmpT1, amin, amax, false)
+		// compact level must not change
+		if len(tmpT1) == len(t1) && tmpT0.size()+vs1.size() < defaultCompactionTableSize*defaultCompactionExpandS0LimitFactor {
+			t0 = tmpT0
+			imin, imax = amin, amax
+		}
+	}
+
+	// calculate the grand parent's
+	gpLevel := c.cPtr.level + 2
+	if gpLevel < kLevelNum {
+		vs2 := c.levels[c.cPtr.level+2]
+		vs2.getOverlapped1(&c.gp, imin, imax, false)
+	}
 
 }
 
