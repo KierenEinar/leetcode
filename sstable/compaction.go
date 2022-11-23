@@ -56,7 +56,7 @@ type Compaction struct {
 
 // required: must held vmutex
 func (versionSet *VersionSet) pickCompaction() *Compaction {
-	inputLevel := versionSet.bestCompactionLevel
+	inputLevel := versionSet.current.cLevel
 	cPtr := versionSet.loadCompactPtr(inputLevel)
 
 	var s0 tFiles

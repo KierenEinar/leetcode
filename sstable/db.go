@@ -323,6 +323,11 @@ func (db *DB) backgroundCompaction() {
 		return
 	}
 
+	c := db.VersionSet.pickCompaction()
+	if c == nil {
+		return
+	}
+
 }
 
 func (db *DB) compactMemTable() {
