@@ -3,6 +3,7 @@ package sstable
 import (
 	"bytes"
 	"sort"
+	"sync/atomic"
 )
 
 type compaction1 struct {
@@ -18,7 +19,14 @@ type compaction1 struct {
 	gpOverlappedBytes int
 	gpOverlappedLimit int
 
+	inputOverlappedGPIndex int
+
 	cmp BasicComparer
+
+	minSeq  Sequence
+	tWriter *tWriter
+
+	edit VersionEdit
 }
 
 func (vSet *VersionSet) pickCompaction1() *compaction1 {
@@ -190,4 +198,119 @@ func (tFiles tFiles) getRange1(cmp BasicComparer) (imin, imax InternalKey) {
 		}
 	}
 	return
+}
+
+func (db *DB) doCompactionWork(c *compaction1) error {
+
+	if db.VersionSet.snapshots.Len() == 0 {
+		c.minSeq = db.seqNum
+	} else {
+		c.minSeq = db.VersionSet.snapshots.Front().Value.(Sequence)
+	}
+
+	iter, err := db.VersionSet.makeInputIterator(c)
+	if err != nil {
+		return err
+	}
+
+	db.rwMutex.Unlock()
+
+	for iter.Next() && iter.Valid() == nil && atomic.LoadUint32(&db.shutdown) == 0 {
+
+		if atomic.LoadUint32(&db.hasImm) == 1 {
+			db.rwMutex.Lock()
+			db.compactMemTable()
+			db.rwMutex.Unlock()
+			db.backgroundWorkFinishedSignal.Broadcast()
+		}
+
+		inputKey := iter.Key()
+
+		// if current file input key will expand the overlapped with grand parent,
+		// it need to finish current table and create a new one
+		if c.tWriter != nil && c.shouldStopBefore(inputKey) {
+			if err = db.finishCompactionOutputFile(c); err != nil {
+				return err
+			}
+		}
+
+	}
+
+}
+
+func (vset *VersionSet) makeInputIterator(c *compaction1) (iter Iterator, err error) {
+
+	iters := make([]Iterator, 0)
+
+	defer func() {
+		if err != nil {
+			for _, iter := range iters {
+				iter.UnRef()
+			}
+			iters = nil
+		}
+	}()
+
+	for which, inputs := range c.inputs {
+		if c.cPtr.level+which == 0 {
+			for _, input := range inputs {
+				iter, err := vset.newTableIterator(input)
+				if err != nil {
+					return
+				}
+				iters = append(iters, iter)
+			}
+			iters = append(iters, iter)
+		} else {
+			iters = append(iters, newIndexedIterator(newTFileArrIteratorIndexer(inputs)))
+		}
+	}
+	return
+}
+
+func (vset *VersionSet) newTableIterator(tFile tFile) (Iterator, error) {
+
+	reader, err := vset.storage.Open(tFile.fd)
+	if err != nil {
+		return nil, err
+	}
+	tr, err := NewTableReader(reader, tFile.Size)
+	if err != nil {
+		return nil, err
+	}
+
+	iter, err := tr.NewIterator()
+	if err != nil {
+		return nil, err
+	}
+
+	return iter, nil
+}
+
+func (c *compaction1) shouldStopBefore(nextKey InternalKey) bool {
+
+	for c.inputOverlappedGPIndex < len(c.gp) {
+		if c.cmp.Compare(nextKey, c.gp[c.inputOverlappedGPIndex].iMax) > 0 {
+			c.gpOverlappedBytes += c.gp[c.inputOverlappedGPIndex].Size
+			c.inputOverlappedGPIndex++
+			if c.gpOverlappedBytes > c.gpOverlappedLimit {
+				c.gpOverlappedBytes = 0
+				return true
+			}
+		} else {
+			break
+		}
+	}
+	return false
+}
+
+func (db *DB) finishCompactionOutputFile(c *compaction1) error {
+	assert(c.tWriter != nil)
+
+	tFile, err := c.tWriter.finish()
+	if err != nil {
+		return err
+	}
+	c.edit.addNewTable(c.cPtr.level+1, tFile.Size, tFile.fd.Num, tFile.iMin, tFile.iMax)
+	return nil
 }

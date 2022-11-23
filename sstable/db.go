@@ -337,6 +337,8 @@ func (db *DB) backgroundCompaction() {
 		}
 	} else {
 
+		db.doCompactionWork(c)
+
 	}
 
 }
@@ -355,7 +357,7 @@ func (db *DB) compactMemTable() {
 		atomic.StoreUint32(&db.hasImm, 1)
 		db.removeObsoleteFile()
 	} else {
-		db.bgErr = err
+		db.recordBackgroundError(err)
 	}
 }
 
