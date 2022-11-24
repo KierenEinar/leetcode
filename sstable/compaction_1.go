@@ -220,8 +220,8 @@ func (db *DB) doCompactionWork(c *compaction1) error {
 		if atomic.LoadUint32(&db.hasImm) == 1 {
 			db.rwMutex.Lock()
 			db.compactMemTable()
-			db.rwMutex.Unlock()
 			db.backgroundWorkFinishedSignal.Broadcast()
+			db.rwMutex.Unlock()
 		}
 
 		inputKey := iter.Key()
