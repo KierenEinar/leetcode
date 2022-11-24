@@ -266,7 +266,6 @@ func (db *DB) doCompactionWork(c *compaction1) error {
 			}
 			lastSeq = Sequence(seq)
 		}
-
 	}
 
 }
