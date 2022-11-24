@@ -27,6 +27,8 @@ type compaction1 struct {
 	tWriter *tWriter
 
 	edit VersionEdit
+
+	baseLevelI [kLevelNum]int
 }
 
 func (vSet *VersionSet) pickCompaction1() *compaction1 {
@@ -208,12 +210,19 @@ func (db *DB) doCompactionWork(c *compaction1) error {
 		c.minSeq = db.VersionSet.snapshots.Front().Value.(Sequence)
 	}
 
-	iter, err := db.VersionSet.makeInputIterator(c)
-	if err != nil {
-		return err
+	iter, iterErr := db.VersionSet.makeInputIterator(c)
+	if iterErr != nil {
+		return iterErr
 	}
 
 	db.rwMutex.Unlock()
+
+	var (
+		drop     bool
+		err      error
+		lastIKey InternalKey
+		lastSeq  Sequence
+	)
 
 	for iter.Next() && iter.Valid() == nil && atomic.LoadUint32(&db.shutdown) == 0 {
 
@@ -230,8 +239,32 @@ func (db *DB) doCompactionWork(c *compaction1) error {
 		// it need to finish current table and create a new one
 		if c.tWriter != nil && c.shouldStopBefore(inputKey) {
 			if err = db.finishCompactionOutputFile(c); err != nil {
-				return err
+				break
 			}
+		}
+
+		uk, kt, seq, parseErr := parseInternalKey(inputKey)
+
+		if parseErr != nil {
+			lastIKey = append([]byte(nil), inputKey...)
+			drop = false
+		} else {
+			// ukey first occur
+			if lastIKey == nil || bytes.Compare(lastIKey.ukey(), uk) != 0 {
+				lastSeq = Sequence(kMaxSequenceNum)
+				lastIKey = append([]byte(nil), inputKey...)
+			}
+			if lastSeq > c.minSeq {
+				drop = false
+				if kt == keyTypeValue {
+
+				} else if kt == keyTypeDel && Sequence(seq) < c.minSeq && c.isBaseLevelForKey(inputKey) {
+					drop = true
+				}
+			} else {
+				drop = true
+			}
+			lastSeq = Sequence(seq)
 		}
 
 	}
@@ -265,6 +298,9 @@ func (vset *VersionSet) makeInputIterator(c *compaction1) (iter Iterator, err er
 			iters = append(iters, newIndexedIterator(newTFileArrIteratorIndexer(inputs)))
 		}
 	}
+
+	iter = NewMergeIterator(iters)
+
 	return
 }
 
@@ -313,4 +349,22 @@ func (db *DB) finishCompactionOutputFile(c *compaction1) error {
 	}
 	c.edit.addNewTable(c.cPtr.level+1, tFile.Size, tFile.fd.Num, tFile.iMin, tFile.iMax)
 	return nil
+}
+
+func (c *compaction1) isBaseLevelForKey(input InternalKey) bool {
+	for levelI := c.cPtr.level + 1; levelI < len(c.levels); levelI++ {
+		level := c.levels[levelI]
+
+		for c.baseLevelI[levelI] < len(level) {
+			table := level[c.baseLevelI[levelI]]
+			if bytes.Compare(input.ukey(), table.iMax.ukey()) > 0 {
+				c.baseLevelI[levelI]++
+			} else if bytes.Compare(input.ukey(), table.iMin.ukey()) < 0 {
+				break
+			} else {
+				return true
+			}
+		}
+	}
+	return false
 }
