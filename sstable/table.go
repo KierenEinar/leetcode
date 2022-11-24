@@ -281,3 +281,7 @@ func (t *tWriter) finish() (*tFile, error) {
 	}, nil
 
 }
+
+func (t *tWriter) size() int {
+	return t.tw.fileSize()
+}

@@ -23,10 +23,10 @@ type compaction1 struct {
 
 	cmp BasicComparer
 
-	minSeq  Sequence
-	tWriter *tWriter
-
-	edit VersionEdit
+	minSeq         Sequence
+	tWriter        *tWriter
+	tableOperation *tableOperation
+	edit           VersionEdit
 
 	baseLevelI [kLevelNum]int
 }
@@ -61,10 +61,12 @@ func (vSet *VersionSet) pickCompaction1() *compaction1 {
 		inputs = append(inputs, level[0])
 	}
 
-	return newCompaction1(inputs, cPtr, vSet.current, vSet.current.levels, vSet.cmp)
+	return newCompaction1(inputs, cPtr, vSet.current, vSet.tableOperation,
+		vSet.current.levels, vSet.cmp)
 }
 
-func newCompaction1(inputs tFiles, cPtr compactPtr, version *Version, levels Levels, cmp BasicComparer) *compaction1 {
+func newCompaction1(inputs tFiles, cPtr compactPtr, version *Version, tableOperation *tableOperation,
+	levels Levels, cmp BasicComparer) *compaction1 {
 	version.Ref()
 	c := &compaction1{
 		inputs:            [2]tFiles{inputs},
@@ -72,7 +74,8 @@ func newCompaction1(inputs tFiles, cPtr compactPtr, version *Version, levels Lev
 		levels:            levels,
 		cPtr:              cPtr,
 		cmp:               cmp,
-		gpOverlappedLimit: defaultGPOverlappedLimit,
+		gpOverlappedLimit: defaultGPOverlappedLimit * defaultCompactionTableSize,
+		tableOperation:    tableOperation,
 	}
 	c.expand()
 	return c
@@ -234,7 +237,7 @@ func (db *DB) doCompactionWork(c *compaction1) error {
 		}
 
 		inputKey := iter.Key()
-
+		value := iter.Value()
 		// if current file input key will expand the overlapped with grand parent,
 		// it need to finish current table and create a new one
 		if c.tWriter != nil && c.shouldStopBefore(inputKey) {
@@ -266,7 +269,41 @@ func (db *DB) doCompactionWork(c *compaction1) error {
 			}
 			lastSeq = Sequence(seq)
 		}
+
+		if drop {
+			continue
+		}
+
+		if c.tWriter != nil && c.tWriter.size() > defaultCompactionTableSize {
+			if err = db.finishCompactionOutputFile(c); err != nil {
+				break
+			}
+		}
+
+		if c.tWriter == nil {
+			if c.tWriter, err = c.tableOperation.create(); err != nil {
+				break
+			}
+		}
+
+		if err = c.tWriter.append(inputKey, value); err != nil {
+			break
+		}
 	}
+
+	if c.tWriter != nil {
+		err = db.finishCompactionOutputFile(c)
+	}
+
+	iter.UnRef()
+
+	db.rwMutex.Lock()
+
+	if err == nil {
+		err = db.VersionSet.logAndApply(&c.edit, &db.rwMutex)
+	}
+
+	return err
 
 }
 
@@ -347,11 +384,12 @@ func (db *DB) finishCompactionOutputFile(c *compaction1) error {
 		return err
 	}
 	c.edit.addNewTable(c.cPtr.level+1, tFile.Size, tFile.fd.Num, tFile.iMin, tFile.iMax)
+	c.tWriter = nil
 	return nil
 }
 
 func (c *compaction1) isBaseLevelForKey(input InternalKey) bool {
-	for levelI := c.cPtr.level + 1; levelI < len(c.levels); levelI++ {
+	for levelI := c.cPtr.level + 2; levelI < len(c.levels); levelI++ {
 		level := c.levels[levelI]
 
 		for c.baseLevelI[levelI] < len(level) {
@@ -361,9 +399,9 @@ func (c *compaction1) isBaseLevelForKey(input InternalKey) bool {
 			} else if bytes.Compare(input.ukey(), table.iMin.ukey()) < 0 {
 				break
 			} else {
-				return true
+				return false
 			}
 		}
 	}
-	return false
+	return true
 }

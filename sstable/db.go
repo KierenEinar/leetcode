@@ -326,7 +326,7 @@ func (db *DB) backgroundCompaction() {
 	c := db.VersionSet.pickCompaction1()
 	if c == nil {
 		return
-	} else if len(c.inputs[0]) == 1 && len(c.inputs[1]) == 0 && c.gp.size() <= defaultCompactionTableSize*defaultGPOverlappedLimit {
+	} else if len(c.inputs[0]) == 1 && len(c.inputs[1]) == 0 && c.gp.size() <= c.gpOverlappedLimit {
 
 		edit := &VersionEdit{}
 		addTable := c.inputs[0][0]
@@ -336,9 +336,11 @@ func (db *DB) backgroundCompaction() {
 			db.recordBackgroundError(err)
 		}
 	} else {
-
-		db.doCompactionWork(c)
-
+		err := db.doCompactionWork(c)
+		if err != nil {
+			db.recordBackgroundError(err)
+		}
+		db.removeObsoleteFiles()
 	}
 
 }
@@ -355,7 +357,7 @@ func (db *DB) compactMemTable() {
 		db.imm = nil
 		imm.UnRef()
 		atomic.StoreUint32(&db.hasImm, 1)
-		db.removeObsoleteFile()
+		db.removeObsoleteFiles()
 	} else {
 		db.recordBackgroundError(err)
 	}

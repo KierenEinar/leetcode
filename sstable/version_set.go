@@ -20,6 +20,8 @@ type VersionSet struct {
 	manifestFd     Fd
 	manifestWriter *JournalWriter // lazy init
 
+	tableOperation *tableOperation
+
 	storage   Storage
 	snapshots *list.List
 }
