@@ -307,7 +307,7 @@ func (db *DB) doCompactionWork(c *compaction1) error {
 
 }
 
-func (vset *VersionSet) makeInputIterator(c *compaction1) (iter Iterator, err error) {
+func (vSet *VersionSet) makeInputIterator(c *compaction1) (iter Iterator, err error) {
 
 	iters := make([]Iterator, 0)
 
@@ -323,7 +323,7 @@ func (vset *VersionSet) makeInputIterator(c *compaction1) (iter Iterator, err er
 	for which, inputs := range c.inputs {
 		if c.cPtr.level+which == 0 {
 			for _, input := range inputs {
-				iter, err := vset.newTableIterator(input)
+				iter, err := vSet.newTableIterator(input)
 				if err != nil {
 					return
 				}
@@ -340,9 +340,9 @@ func (vset *VersionSet) makeInputIterator(c *compaction1) (iter Iterator, err er
 	return
 }
 
-func (vset *VersionSet) newTableIterator(tFile tFile) (Iterator, error) {
+func (vSet *VersionSet) newTableIterator(tFile tFile) (Iterator, error) {
 
-	reader, err := vset.storage.Open(tFile.fd)
+	reader, err := vSet.storage.Open(tFile.fd)
 	if err != nil {
 		return nil, err
 	}
@@ -404,4 +404,8 @@ func (c *compaction1) isBaseLevelForKey(input InternalKey) bool {
 		}
 	}
 	return true
+}
+
+func (c *compaction1) releaseInputs() {
+	c.version.UnRef()
 }

@@ -46,7 +46,7 @@ type JournalWriter struct {
 	blockOffset int
 }
 
-func NewJournalWriter(writer Writer) *JournalWriter {
+func NewJournalWriter(writer SequentialWriter) *JournalWriter {
 	return &JournalWriter{
 		dest: &writableFile{
 			w: writer,
@@ -149,10 +149,15 @@ func (jw *JournalWriter) Close() error {
 	return jw.dest.Close()
 }
 
+func (jw *JournalWriter) Sync() error {
+	return jw.dest.w.Sync()
+}
+
 type writableFile struct {
-	w   Writer
-	pos int
-	buf [kWritableBufferSize]byte
+	optionFlush bool
+	w           SequentialWriter
+	pos         int
+	buf         [kWritableBufferSize]byte
 }
 
 func (w *writableFile) append(data []byte) error {
@@ -230,13 +235,22 @@ type JournalReader struct {
 	scratch bytes.Buffer // for reused read
 }
 
+func NewJournalReader(reader SequentialReader) *JournalReader {
+	return &JournalReader{
+		src: &sequentialFile{
+			SequentialReader: reader,
+		},
+		scratch: *bytes.NewBuffer(nil),
+	}
+}
+
 type chunkReader struct {
 	jr               *JournalReader
 	inFragmentRecord bool // current fragment is part of chunk ?
 	eof              bool
 }
 
-func (jr *JournalReader) NextChunk() (io.Reader, error) {
+func (jr *JournalReader) NextChunk() (SequentialReader, error) {
 
 	for {
 		kRecordType, fragment, err := jr.seekNextFragment(true)
@@ -259,6 +273,11 @@ func (jr *JournalReader) NextChunk() (io.Reader, error) {
 		eof := !inFragmentRecord
 		return &chunkReader{jr, inFragmentRecord, eof}, nil
 	}
+}
+
+func (jr *JournalReader) Close() error {
+	jr.scratch.Reset()
+	return nil
 }
 
 func (chunk *chunkReader) ReadByte() (byte, error) {
@@ -323,6 +342,10 @@ func (chunk *chunkReader) Read(p []byte) (nRead int, rErr error) {
 	}
 }
 
+func (chunk *chunkReader) Close() error {
+	return nil
+}
+
 func (jr *JournalReader) seekNextFragment(first bool) (kRecordType byte, fragment []byte, err error) {
 
 	kRecordType, fragment = jr.src.readPhysicalRecord()
@@ -354,7 +377,7 @@ func (jr *JournalReader) seekNextFragment(first bool) (kRecordType byte, fragmen
 }
 
 type sequentialFile struct {
-	r                  Reader
+	SequentialReader
 	physicalReadOffset int // current cursor read offset
 	physicalN          int // current physical offset
 	buf                [kJournalBlockSize]byte
@@ -366,7 +389,7 @@ func (s *sequentialFile) readPhysicalRecord() (kRecordType byte, fragment []byte
 	for {
 		if s.physicalReadOffset+journalBlockHeaderLen > s.physicalN {
 			if !s.eof {
-				n, err := s.r.Read(s.buf[:])
+				n, err := s.Read(s.buf[:])
 				s.physicalN += n
 				if err != nil {
 					s.eof = true

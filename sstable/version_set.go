@@ -4,6 +4,7 @@ import "C"
 import (
 	"container/list"
 	"encoding/binary"
+	"io"
 	"sort"
 	"sync"
 )
@@ -14,6 +15,7 @@ type VersionSet struct {
 	compactPtrs [kLevelNum]compactPtr
 	cmp         *iComparer
 
+	comparerName   []byte
 	nextFileNum    uint64
 	stJournalNum   uint64
 	stSeqNum       Sequence // current memtable start seq num
@@ -36,7 +38,7 @@ type Version struct {
 }
 
 type vBuilder struct {
-	session  *VersionSet
+	vSet     *VersionSet
 	base     *Version
 	inserted [kLevelNum]*tFileSortedSet
 	deleted  [kLevelNum]*uintSortedSet
@@ -44,8 +46,8 @@ type vBuilder struct {
 
 func newBuilder(session *VersionSet, base *Version) *vBuilder {
 	builder := &vBuilder{
-		session: session,
-		base:    base,
+		vSet: session,
+		base: base,
 	}
 	for i := 0; i < kLevelNum; i++ {
 		builder.inserted[i] = newTFileSortedSet()
@@ -58,7 +60,7 @@ func newBuilder(session *VersionSet, base *Version) *vBuilder {
 
 func (builder *vBuilder) apply(edit VersionEdit) {
 	for _, cPtr := range edit.compactPtrs {
-		builder.session.compactPtrs[cPtr.level] = cPtr
+		builder.vSet.compactPtrs[cPtr.level] = cPtr
 	}
 	for _, delTable := range edit.delTables {
 		level, number := delTable.level, delTable.number
@@ -83,7 +85,7 @@ func (builder *vBuilder) saveTo(v *Version) {
 			if !ok {
 				panic("vBuilder iter convert value to tFile failed...")
 			}
-			pos := upperBound(baseFile, level, iter, builder.session.cmp)
+			pos := upperBound(baseFile, level, iter, builder.vSet.cmp)
 			for i := beginPos; i < pos; i++ {
 				builder.maybeAddFile(v, baseFile[i], level)
 			}
@@ -124,7 +126,7 @@ func (builder *vBuilder) maybeAddFile(v *Version, file tFile, level int) {
 	}
 
 	files := v.levels[level]
-	cmp := builder.session.cmp
+	cmp := builder.vSet.cmp
 	if level > 0 && len(files) > 0 {
 		assert(cmp.Compare(files[len(files)-1].iMax, file.iMin) < 0)
 	}
@@ -301,7 +303,7 @@ func (set *anySortedSet) contains(item interface{}) bool {
 // LogAndApply apply a new version and record change into manifest file
 // noted: thread not safe
 // caller should hold a mutex
-func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.RWMutex) error {
+func (vSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.RWMutex) error {
 
 	assertMutexHeld(mutex)
 
@@ -322,23 +324,23 @@ func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.RWMutex
 	to protect.
 	*/
 	if edit.hasRec(kJournalNum) {
-		assert(edit.journalNum >= versionSet.stJournalNum)
-		assert(edit.journalNum < versionSet.nextFileNum)
+		assert(edit.journalNum >= vSet.stJournalNum)
+		assert(edit.journalNum < vSet.nextFileNum)
 	} else {
-		edit.journalNum = versionSet.stJournalNum
+		edit.journalNum = vSet.stJournalNum
 	}
 
 	if edit.hasRec(kSeqNum) {
-		assert(edit.lastSeq >= versionSet.stSeqNum)
+		assert(edit.lastSeq >= vSet.stSeqNum)
 	} else {
-		edit.lastSeq = versionSet.stSeqNum
+		edit.lastSeq = vSet.stSeqNum
 	}
 
-	edit.setNextFile(versionSet.nextFileNum)
+	edit.setNextFile(vSet.nextFileNum)
 
 	// apply new version
 	v := &Version{}
-	builder := newBuilder(versionSet, versionSet.current)
+	builder := newBuilder(vSet, vSet.current)
 	builder.apply(*edit)
 	builder.saveTo(v)
 	finalize(v)
@@ -346,10 +348,10 @@ func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.RWMutex
 	mutex.Unlock() // cause compaction is run in single thread, so we can avoid expensive write syscall
 
 	var (
-		writer         Writer
-		storage        = versionSet.storage
-		manifestWriter = versionSet.manifestWriter
-		manifestFd     = versionSet.manifestFd
+		writer         SequentialWriter
+		storage        = vSet.storage
+		manifestWriter = vSet.manifestWriter
+		manifestFd     = vSet.manifestFd
 		newManifest    bool
 		err            error
 	)
@@ -361,8 +363,8 @@ func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.RWMutex
 	if manifestWriter != nil && manifestWriter.size() >= kManifestSizeThreshold {
 		newManifest = true
 		manifestFd = Fd{
-			FileType: Journal,
-			Num:      versionSet.allocFileNum(),
+			FileType: KJournalFile,
+			Num:      vSet.allocFileNum(),
 		}
 	}
 
@@ -370,7 +372,7 @@ func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.RWMutex
 		writer, err = storage.Create(manifestFd)
 		if err == nil {
 			manifestWriter = NewJournalWriter(writer)
-			err = versionSet.writeSnapShot(manifestWriter) // write current version snapshot into manifest
+			err = vSet.writeSnapShot(manifestWriter) // write current version snapshot into manifest
 		}
 	}
 
@@ -380,19 +382,19 @@ func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.RWMutex
 	}
 
 	if err == nil {
-		err = storage.SetCurrent(manifestFd)
+		err = storage.SetCurrent(manifestFd.Num)
 		if err == nil {
-			versionSet.manifestFd = manifestFd
-			versionSet.manifestWriter = manifestWriter
+			vSet.manifestFd = manifestFd
+			vSet.manifestWriter = manifestWriter
 		}
 	}
 
 	mutex.Lock()
 
 	if err == nil {
-		versionSet.appendVersion(v)
-		versionSet.stSeqNum = edit.lastSeq
-		versionSet.stJournalNum = edit.journalNum
+		vSet.appendVersion(v)
+		vSet.stSeqNum = edit.lastSeq
+		vSet.stJournalNum = edit.journalNum
 	} else {
 		if newManifest {
 			err = storage.Remove(manifestFd)
@@ -404,12 +406,12 @@ func (versionSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.RWMutex
 
 // required: mutex held
 // noted: thread not safe
-func (versionSet *VersionSet) appendVersion(v *Version) {
-	versionSet.versions.PushFront(v)
-	old := versionSet.current
+func (vSet *VersionSet) appendVersion(v *Version) {
+	vSet.versions.PushFront(v)
+	old := vSet.current
 	old.UnRef()
-	versionSet.current = v
-	versionSet.current.Ref()
+	vSet.current = v
+	vSet.current.Ref()
 }
 
 func finalize(v *Version) {
@@ -438,9 +440,101 @@ func finalize(v *Version) {
 	v.cLevel = bestLevel
 }
 
-func (versionSet *VersionSet) levelFilesNum(level int) int {
-	c := versionSet.current
+func (vSet *VersionSet) levelFilesNum(level int) int {
+	c := vSet.current
 	c.Ref()
 	defer c.UnRef()
 	return len(c.levels[level])
+}
+
+func (vSet *VersionSet) recover(manifest Fd) (err error) {
+
+	var (
+		hasComparerName, hasLogFileNum, hasNextFileNum bool
+		comparerName                                   []byte
+		logFileNum                                     uint64
+		seqNum                                         Sequence
+		nextFileNum                                    uint64
+	)
+
+	reader, rErr := vSet.storage.Open(manifest)
+	if rErr != nil {
+		err = rErr
+		return
+	}
+
+	var (
+		edit     VersionEdit
+		vBuilder vBuilder
+		version  Version
+	)
+
+	journalReader := NewJournalReader(reader)
+	vBuilder.vSet = vSet
+	for {
+
+		chunkReader, err := journalReader.NextChunk()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return
+		}
+
+		edit.DecodeFrom(chunkReader)
+
+		if edit.err != nil {
+			err = edit.err
+			return
+		}
+
+		if edit.hasRec(kComparerName) {
+			hasComparerName = true
+			comparerName = edit.comparerName
+		}
+
+		if edit.hasRec(kComparerName) {
+			hasComparerName = true
+			comparerName = edit.comparerName
+		}
+
+		if edit.hasRec(kNextFileNum) {
+			hasNextFileNum = true
+			nextFileNum = edit.nextFileNum
+		}
+
+		if edit.hasRec(kJournalNum) {
+			hasLogFileNum = true
+			logFileNum = edit.journalNum
+		}
+		vBuilder.apply(edit)
+		edit.reset()
+	}
+
+	if !hasComparerName {
+		err = NewErrCorruption("missing comparer name")
+		return
+	}
+
+	if !hasLogFileNum {
+		err = NewErrCorruption("missing log num")
+		return
+	}
+
+	if !hasNextFileNum {
+		err = NewErrCorruption("missing next file num")
+		return
+	}
+
+	vSet.markFileUsed(logFileNum)
+	vSet.markFileUsed(nextFileNum)
+
+	vBuilder.saveTo(&version)
+
+	vSet.versions.PushBack(&version)
+	vSet.current = &version
+	vSet.stSeqNum = seqNum
+	vSet.stJournalNum = logFileNum
+	vSet.comparerName = comparerName
+	return
 }

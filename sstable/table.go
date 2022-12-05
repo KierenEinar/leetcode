@@ -39,10 +39,10 @@ func (ik InternalKey) ukey() []byte {
 	return dst
 }
 
-func (ik InternalKey) seq() uint64 {
+func (ik InternalKey) seq() Sequence {
 	ik.assert()
 	x := binary.LittleEndian.Uint64(ik[len(ik)-8:])
-	return x >> 8
+	return Sequence(x >> 8)
 }
 
 func (ik InternalKey) keyType() keyType {
@@ -93,25 +93,33 @@ func (sf tFiles) size() (size int) {
 
 type Levels [kLevelNum]tFiles
 
-func (versionSet *VersionSet) allocFileNum() uint64 {
-	nextFileNum := versionSet.nextFileNum
-	versionSet.nextFileNum++
+func (vSet *VersionSet) allocFileNum() uint64 {
+	nextFileNum := vSet.nextFileNum
+	vSet.nextFileNum++
 	return nextFileNum
 }
 
-func (versionSet *VersionSet) reuseFileNum(fileNum uint64) bool {
-	if versionSet.nextFileNum-1 == fileNum {
-		versionSet.nextFileNum = fileNum
+func (vSet *VersionSet) reuseFileNum(fileNum uint64) bool {
+	if vSet.nextFileNum-1 == fileNum {
+		vSet.nextFileNum = fileNum
 		return true
 	}
 	return false
 }
 
-func (versionSet *VersionSet) loadCompactPtr(level int) InternalKey {
-	if level < len(versionSet.compactPtrs) {
+func (vSet *VersionSet) markFileUsed(fileNum uint64) bool {
+	if vSet.nextFileNum < fileNum {
+		vSet.nextFileNum = fileNum
+		return true
+	}
+	return false
+}
+
+func (vSet *VersionSet) loadCompactPtr(level int) InternalKey {
+	if level < len(vSet.compactPtrs) {
 		return nil
 	}
-	return versionSet.compactPtrs[level].ikey
+	return vSet.compactPtrs[level].ikey
 }
 
 func (s tFile) isOverlapped(umin []byte, umax []byte) bool {
@@ -193,7 +201,7 @@ func (s tFiles) getOverlapped(imin InternalKey, imax InternalKey, overlapped boo
 }
 
 // todo finish it
-func (versionSet *VersionSet) createNewTable(fd Fd, fileSize int) (*TableWriter, error) {
+func (vSet *VersionSet) createNewTable(fd Fd, fileSize int) (*TableWriter, error) {
 	return nil, nil
 }
 
@@ -226,7 +234,7 @@ func (tableOperation *tableOperation) newIterator(f tFile) (Iterator, error) {
 }
 
 func (tableOperation *tableOperation) create() (*tWriter, error) {
-	fd := Fd{Num: tableOperation.session.allocFileNum(), FileType: SSTable}
+	fd := Fd{Num: tableOperation.session.allocFileNum(), FileType: KTableFile}
 	w, err := tableOperation.storage.Create(fd)
 	if err != nil {
 		tableOperation.session.reuseFileNum(fd.Num)
@@ -243,7 +251,7 @@ func (tableOperation *tableOperation) create() (*tWriter, error) {
 
 type tWriter struct {
 	fd          Fd
-	fw          Writer
+	fw          SequentialWriter
 	tw          *TableWriter
 	first, last InternalKey
 }

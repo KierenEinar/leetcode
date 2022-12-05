@@ -55,13 +55,13 @@ type Compaction struct {
 }
 
 // required: must held vmutex
-func (versionSet *VersionSet) pickCompaction() *Compaction {
-	inputLevel := versionSet.current.cLevel
-	cPtr := versionSet.loadCompactPtr(inputLevel)
+func (vSet *VersionSet) pickCompaction() *Compaction {
+	inputLevel := vSet.current.cLevel
+	cPtr := vSet.loadCompactPtr(inputLevel)
 
 	var s0 tFiles
 
-	level := versionSet.current.levels[inputLevel]
+	level := vSet.current.levels[inputLevel]
 
 	if cPtr != nil && inputLevel > 0 { // only level [1,n] can find the compact ptr
 
@@ -77,15 +77,15 @@ func (versionSet *VersionSet) pickCompaction() *Compaction {
 		s0 = append(s0, level[0])
 	}
 
-	return newCompaction(inputLevel, s0, versionSet.current.levels, versionSet.tableOperation)
+	return newCompaction(inputLevel, s0, vSet.current.levels, vSet.tableOperation)
 
 }
 
-func (versionSet *VersionSet) finishCompactionOutputFile(tableWriter *TableWriter) error {
+func (vSet *VersionSet) finishCompactionOutputFile(tableWriter *TableWriter) error {
 	return nil
 }
 
-func (versionSet *VersionSet) doCompaction(compaction *Compaction) error {
+func (vSet *VersionSet) doCompaction(compaction *Compaction) error {
 
 	if len(compaction.tFiles[0]) == 1 &&
 		len(compaction.tFiles[1]) == 0 &&

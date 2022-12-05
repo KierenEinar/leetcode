@@ -3,6 +3,8 @@ package sstable
 import (
 	"container/list"
 	"encoding/binary"
+	"io"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -204,7 +206,7 @@ func (db *DB) makeRoomForWrite() error {
 		} else {
 
 			journalFd := Fd{
-				FileType: Journal,
+				FileType: KJournalFile,
 				Num:      db.VersionSet.allocFileNum(),
 			}
 			stor := db.VersionSet.storage
@@ -340,6 +342,7 @@ func (db *DB) backgroundCompaction() {
 		if err != nil {
 			db.recordBackgroundError(err)
 		}
+		c.releaseInputs()
 		db.removeObsoleteFiles()
 	}
 
@@ -385,15 +388,184 @@ func (db *DB) writeLevel0Table(memDb *MemDB, edit *VersionEdit) (err error) {
 	}
 
 	tFile, err := tWriter.finish()
+	db.rwMutex.Lock()
+	if err == nil {
+		edit.addNewTable(0, tFile.Size, tFile.fd.Num, tFile.iMin, tFile.iMax)
+		edit.setLogNum(db.journalFd.Num)
+		edit.setLastSeq(db.frozenSeq)
+		err = db.VersionSet.logAndApply(edit, &db.rwMutex)
+	}
+	return
+}
+
+func Open(dbpath string) (*DB, error) {
+	storage, err := OpenPath(dbpath)
 	if err != nil {
-		db.rwMutex.Lock()
+		return nil, err
+	}
+
+	db := &DB{
+		VersionSet: &VersionSet{
+			cmp:     IComparer,
+			storage: storage,
+		},
+	}
+	db.rwMutex.Lock()
+	defer db.rwMutex.Unlock()
+
+	err = db.recover()
+	if err != nil {
+		return nil, err
+	}
+
+	memDB := NewMemTable(0, db.VersionSet.cmp)
+	memDB.Ref()
+
+	db.mem = memDB
+	journalFd := Fd{
+		FileType: KJournalFile,
+		Num:      db.VersionSet.allocFileNum(),
+	}
+	sequentialWriter, err := storage.Create(journalFd)
+	if err != nil {
+		return nil, err
+	}
+	db.journalFd = journalFd
+	db.journalWriter = NewJournalWriter(sequentialWriter)
+
+	edit := &VersionEdit{}
+	edit.setLastSeq(db.seqNum)
+	edit.setLogNum(db.journalFd.Num)
+	err = db.VersionSet.logAndApply(edit, &db.rwMutex)
+	if err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
+func (db *DB) recover() error {
+	manifestFd, err := db.VersionSet.storage.GetCurrent()
+	if err != nil {
+		if err != os.ErrNotExist {
+			return err
+		}
+		err = db.newDb()
+	} else {
+		err = db.VersionSet.recover(manifestFd)
+	}
+
+	if err != nil {
 		return err
 	}
 
-	db.rwMutex.Lock()
-	edit.addNewTable(0, tFile.Size, tFile.fd.Num, tFile.iMin, tFile.iMax)
-	edit.setLogNum(db.frozenJournalFd.Num)
-	edit.setLastSeq(db.frozenSeq)
-	err = db.VersionSet.logAndApply(edit, &db.rwMutex)
+	db.journalFd = Fd{
+		FileType: KJournalFile,
+		Num:      db.VersionSet.stJournalNum,
+	}
+	db.frozenSeq = db.VersionSet.stSeqNum
+	fds, err := db.VersionSet.storage.List()
+	if err != nil {
+		return err
+	}
+
+	for _, fd := range fds {
+		if fd.FileType == KJournalFile && fd.Num >= db.VersionSet.stJournalNum {
+			if err = db.recoverLogFile(fd); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (db *DB) newDb() (err error) {
+	db.seqNum = 0
+	db.journalFd = Fd{
+		FileType: KJournalFile,
+		Num:      1,
+	}
+
+	manifestFd := Fd{
+		FileType: KDescriptorFile,
+		Num:      2,
+	}
+
+	writer, wErr := db.VersionSet.storage.Create(manifestFd)
+	if wErr != nil {
+		err = wErr
+		return
+	}
+
+	defer func() {
+		if err == nil {
+			return
+		}
+		_ = writer.Close()
+		_ = db.VersionSet.storage.Remove(manifestFd)
+	}()
+
+	db.journalWriter = NewJournalWriter(writer)
+
+	newDb := &VersionEdit{
+		journalNum:  db.journalFd.Num,
+		nextFileNum: 3,
+		lastSeq:     0,
+	}
+
+	newDb.EncodeTo(db.journalWriter)
+	if newDb.err != nil {
+		err = newDb.err
+		return
+	}
+
+	err = db.VersionSet.storage.SetCurrent(manifestFd.Num)
+
 	return
+
+}
+
+func (db *DB) recoverLogFile(fd Fd) error {
+
+	reader, err := db.VersionSet.storage.Open(fd)
+	if err != nil {
+		return err
+	}
+	journalReader := NewJournalReader(reader)
+	memDB := NewMemTable(0, db.VersionSet.cmp)
+	memDB.Ref()
+	defer func() {
+		memDB.UnRef()
+		journalReader.Close()
+		_ = reader.Close()
+	}()
+	for {
+		sequentialReader, err := journalReader.NextChunk()
+
+		if err == io.EOF {
+			break
+		}
+		writeBatch, err := buildBatchGroup(sequentialReader, db.VersionSet.stSeqNum)
+
+		if err != nil {
+			return err
+		}
+		err = writeBatch.insertInto(memDB)
+		if err != nil {
+			return err
+		}
+
+		db.seqNum += writeBatch.seq + Sequence(writeBatch.count) - 1
+
+	}
+
+	edit := &VersionEdit{}
+
+	err = db.writeLevel0Table(memDB, edit)
+	if err != nil {
+		return err
+	}
+
+	return nil
+
 }

@@ -28,6 +28,18 @@ type VersionEdit struct {
 	err          error
 }
 
+func (edit *VersionEdit) reset() {
+	edit.rec = 0
+	edit.comparerName = nil
+	edit.journalNum = 0
+	edit.nextFileNum = 0
+	edit.lastSeq = 0
+	edit.compactPtrs = nil
+	edit.delTables = nil
+	edit.addedTables = nil
+	edit.err = nil
+}
+
 type compactPtr struct {
 	level int
 	ikey  InternalKey
@@ -148,7 +160,7 @@ func (edit *VersionEdit) EncodeTo(dest io.Writer) {
 	}
 }
 
-func (edit *VersionEdit) DecodeFrom(src Reader) {
+func (edit *VersionEdit) DecodeFrom(src SequentialReader) {
 
 	var typ int
 
@@ -229,7 +241,7 @@ func (edit *VersionEdit) DecodeFrom(src Reader) {
 
 }
 
-func (edit *VersionEdit) readHeader(src Reader) int {
+func (edit *VersionEdit) readHeader(src SequentialReader) int {
 	return edit.readVarInt(src)
 }
 
@@ -255,19 +267,19 @@ func (edit *VersionEdit) putUVarInt(w io.Writer, value uint64) {
 	return
 }
 
-func (edit *VersionEdit) readVarInt(src Reader) int {
+func (edit *VersionEdit) readVarInt(src SequentialReader) int {
 	var value int64
 	value, edit.err = binary.ReadVarint(src)
 	return int(value)
 }
 
-func (edit *VersionEdit) readUVarInt(src Reader) uint64 {
+func (edit *VersionEdit) readUVarInt(src SequentialReader) uint64 {
 	var value uint64
 	value, edit.err = binary.ReadUvarint(src)
 	return value
 }
 
-func (edit *VersionEdit) readBytes(src Reader) []byte {
+func (edit *VersionEdit) readBytes(src SequentialReader) []byte {
 
 	size, err := binary.ReadVarint(src)
 	if err != nil {

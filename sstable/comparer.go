@@ -30,3 +30,6 @@ func (ic iComparer) Compare(a, b []byte) int {
 }
 
 var DefaultComparer = &BytesComparer{}
+var IComparer = &iComparer{
+	uCmp: DefaultComparer,
+}

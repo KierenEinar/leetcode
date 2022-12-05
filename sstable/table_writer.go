@@ -244,7 +244,7 @@ func readBH(buf []byte) (bhLen int, bh blockHandle) {
 }
 
 type TableWriter struct {
-	writer      Writer
+	writer      SequentialWriter
 	dataBlock   *blockWriter
 	indexBlock  *blockWriter
 	metaBlock   *blockWriter
@@ -260,7 +260,7 @@ type TableWriter struct {
 	scratch [50]byte // tail 20 bytes used to encode block handle
 }
 
-func NewTableWriter(w Writer) *TableWriter {
+func NewTableWriter(w SequentialWriter) *TableWriter {
 	return &TableWriter{
 		writer:  w,
 		iFilter: defaultFilter,

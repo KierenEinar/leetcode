@@ -24,4 +24,5 @@ var (
 	ErrJournalSkipped           = errors.New("leveldb/journal skipped")
 	ErrMissingChunk             = errors.New("leveldb/journal chunk miss")
 	ErrClosed                   = errors.New("leveldb/shutdown")
+	ErrFileIsDir                = errors.New("leveldb/path is dir")
 )
