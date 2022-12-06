@@ -449,6 +449,7 @@ func Open(dbpath string) (*DB, error) {
 
 	//todo warn err log
 	err = db.removeObsoleteFiles()
+	db.MaybeScheduleCompaction()
 
 	return db, nil
 }
