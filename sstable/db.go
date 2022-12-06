@@ -47,6 +47,10 @@ type DB struct {
 	tableOperation *tableOperation
 }
 
+func (db *DB) get(key []byte) ([]byte, error) {
+
+}
+
 func (db *DB) write(batch *WriteBatch) error {
 
 	if atomic.LoadUint32(&db.shutdown) == 1 {
@@ -344,7 +348,11 @@ func (db *DB) backgroundCompaction() {
 			db.recordBackgroundError(err)
 		}
 		c.releaseInputs()
-		db.removeObsoleteFiles()
+		err = db.removeObsoleteFiles()
+		if err != nil {
+			// todo log warn msg
+		}
+
 	}
 
 }
@@ -364,8 +372,12 @@ func (db *DB) compactMemTable() {
 		edit.setLogNum(db.journalFd.Num)
 		edit.setLastSeq(db.frozenSeq)
 		err = db.VersionSet.logAndApply(edit, &db.rwMutex)
-		db.removeObsoleteFiles()
-	} else {
+		if err == nil {
+			err = db.removeObsoleteFiles()
+		}
+	}
+
+	if err != nil {
 		db.recordBackgroundError(err)
 	}
 }
@@ -675,6 +687,9 @@ func (db *DB) removeObsoleteFiles() (err error) {
 		if rErr != nil {
 			err = rErr
 		}
+
+		// todo evict table cache
+
 	}
 
 	db.rwMutex.Lock()
