@@ -2,6 +2,7 @@ package sstable
 
 import "C"
 import (
+	"bytes"
 	"container/list"
 	"encoding/binary"
 	"io"
@@ -201,6 +202,10 @@ func (uc uint64Comparer) Compare(a, b []byte) int {
 	}
 }
 
+func (uc uint64Comparer) Name() []byte {
+	return []byte("leveldb.uint64comparator")
+}
+
 type tFileSortedSet struct {
 	*anySortedSet
 }
@@ -232,6 +237,10 @@ func (tc *tFileComparer) Compare(a, b []byte) int {
 		return -1
 	}
 	return 1
+}
+
+func (tc *tFileComparer) Name() []byte {
+	return []byte("leveldb.tFilecomparator")
 }
 
 func encodeTFileToBinary(item interface{}) (bool, []byte) {
@@ -490,11 +499,10 @@ func (vSet *VersionSet) recover(manifest Fd) (err error) {
 
 		if edit.hasRec(kComparerName) {
 			hasComparerName = true
-			comparerName = edit.comparerName
-		}
-
-		if edit.hasRec(kComparerName) {
-			hasComparerName = true
+			if bytes.Compare(edit.comparerName, vSet.cmp.Name()) != 0 {
+				err = NewErrCorruption("invalid comparator")
+				return
+			}
 			comparerName = edit.comparerName
 		}
 
@@ -530,11 +538,34 @@ func (vSet *VersionSet) recover(manifest Fd) (err error) {
 	vSet.markFileUsed(nextFileNum)
 
 	vBuilder.saveTo(&version)
-
+	finalize(&version)
 	vSet.versions.PushBack(&version)
 	vSet.current = &version
+	vSet.manifestFd = Fd{
+		FileType: KDescriptorFile,
+		Num:      nextFileNum,
+	}
+	vSet.nextFileNum = nextFileNum + 1
 	vSet.stSeqNum = seqNum
 	vSet.stJournalNum = logFileNum
 	vSet.comparerName = comparerName
 	return
+}
+
+func (vSet *VersionSet) getCurrent() *Version {
+	current := vSet.current
+	current.Ref()
+	return current
+}
+
+func (vSet *VersionSet) addLiveFiles(expected map[uint64]struct{}) {
+
+	ver := vSet.getCurrent()
+	defer ver.UnRef()
+
+	for _, level := range ver.levels {
+		for _, v := range level {
+			expected[v.fd.Num] = struct{}{}
+		}
+	}
 }

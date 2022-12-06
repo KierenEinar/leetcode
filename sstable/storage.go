@@ -2,7 +2,6 @@ package sstable
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"io/ioutil"
 	"os"
@@ -135,7 +134,6 @@ func (fs *FileStorage) SetCurrent(num uint64) (err error) {
 func (fs *FileStorage) GetCurrent() (fd Fd, err error) {
 
 	current := path.Join(fs.dbPath, "CURRENT")
-
 	fInfo, sErr := os.Stat(current)
 	if sErr != nil {
 		err = sErr
@@ -161,7 +159,7 @@ func (fs *FileStorage) GetCurrent() (fd Fd, err error) {
 	}
 
 	if len(content) == 0 || !bytes.HasSuffix(content, []byte("\n")) {
-		err = errors.New("current content invalid")
+		err = NewErrCorruption("invalid current file content")
 		return
 	}
 

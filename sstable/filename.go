@@ -72,7 +72,7 @@ func parseFd(fileName string) (fd Fd, err error) {
 		}
 
 		switch ft {
-		case "ldb":
+		case "ldb", "sst":
 			fd.FileType = KTableFile
 		case "log":
 			fd.FileType = KJournalFile

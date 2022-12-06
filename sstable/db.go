@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -360,6 +361,9 @@ func (db *DB) compactMemTable() {
 		db.imm = nil
 		imm.UnRef()
 		atomic.StoreUint32(&db.hasImm, 1)
+		edit.setLogNum(db.journalFd.Num)
+		edit.setLastSeq(db.frozenSeq)
+		err = db.VersionSet.logAndApply(edit, &db.rwMutex)
 		db.removeObsoleteFiles()
 	} else {
 		db.recordBackgroundError(err)
@@ -367,12 +371,12 @@ func (db *DB) compactMemTable() {
 }
 
 func (db *DB) writeLevel0Table(memDb *MemDB, edit *VersionEdit) (err error) {
-	assertMutexHeld(&db.rwMutex)
+
 	db.rwMutex.Unlock()
+	defer db.rwMutex.Lock()
 
 	tWriter, err := db.tableOperation.create()
 	if err != nil {
-		db.rwMutex.Lock()
 		return err
 	}
 
@@ -388,12 +392,8 @@ func (db *DB) writeLevel0Table(memDb *MemDB, edit *VersionEdit) (err error) {
 	}
 
 	tFile, err := tWriter.finish()
-	db.rwMutex.Lock()
 	if err == nil {
 		edit.addNewTable(0, tFile.Size, tFile.fd.Num, tFile.iMin, tFile.iMax)
-		edit.setLogNum(db.journalFd.Num)
-		edit.setLastSeq(db.frozenSeq)
-		err = db.VersionSet.logAndApply(edit, &db.rwMutex)
 	}
 	return
 }
@@ -406,10 +406,16 @@ func Open(dbpath string) (*DB, error) {
 
 	db := &DB{
 		VersionSet: &VersionSet{
-			cmp:     IComparer,
-			storage: storage,
+			cmp:       IComparer,
+			storage:   storage,
+			versions:  list.New(),
+			snapshots: list.New(),
 		},
 	}
+
+	tableOperation := newTableOperation(storage, db.VersionSet)
+	db.VersionSet.tableOperation = tableOperation
+
 	db.rwMutex.Lock()
 	defer db.rwMutex.Unlock()
 
@@ -458,24 +464,46 @@ func (db *DB) recover() error {
 		return err
 	}
 
-	db.journalFd = Fd{
-		FileType: KJournalFile,
-		Num:      db.VersionSet.stJournalNum,
-	}
-	db.frozenSeq = db.VersionSet.stSeqNum
 	fds, err := db.VersionSet.storage.List()
 	if err != nil {
 		return err
 	}
 
+	var expectedFiles = make(map[uint64]struct{})
+	db.VersionSet.addLiveFiles(expectedFiles)
+
+	logFiles := make([]Fd, 0)
+
 	for _, fd := range fds {
-		if fd.FileType == KJournalFile && fd.Num >= db.VersionSet.stJournalNum {
-			if err = db.recoverLogFile(fd); err != nil {
-				return err
-			}
+		if fd.FileType == KTableFile {
+			delete(expectedFiles, fd.Num)
+		} else if fd.FileType == KJournalFile && fd.Num >= db.VersionSet.stJournalNum {
+			logFiles = append(logFiles, fd)
 		}
 	}
 
+	if len(expectedFiles) > 0 {
+		err = NewErrCorruption("invalid table file, file not exists")
+		return err
+	}
+
+	sort.Slice(logFiles, func(i, j int) bool {
+		return logFiles[i].Num < logFiles[j].Num
+	})
+
+	var edit VersionEdit
+
+	for _, logFile := range logFiles {
+		err = db.recoverLogFile(logFile, &edit)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = db.VersionSet.logAndApply(&edit, &db.rwMutex)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -508,9 +536,10 @@ func (db *DB) newDb() (err error) {
 	db.journalWriter = NewJournalWriter(writer)
 
 	newDb := &VersionEdit{
-		journalNum:  db.journalFd.Num,
-		nextFileNum: 3,
-		lastSeq:     0,
+		journalNum:   db.journalFd.Num,
+		nextFileNum:  3,
+		lastSeq:      0,
+		comparerName: IComparer.Name(),
 	}
 
 	newDb.EncodeTo(db.journalWriter)
@@ -525,7 +554,7 @@ func (db *DB) newDb() (err error) {
 
 }
 
-func (db *DB) recoverLogFile(fd Fd) error {
+func (db *DB) recoverLogFile(fd Fd, edit *VersionEdit) error {
 
 	reader, err := db.VersionSet.storage.Open(fd)
 	if err != nil {
@@ -550,6 +579,18 @@ func (db *DB) recoverLogFile(fd Fd) error {
 		if err != nil {
 			return err
 		}
+
+		if memDB.ApproximateSize() > kMemTableWriteBufferSize {
+			err = db.writeLevel0Table(memDB, edit)
+			if err != nil {
+				return err
+			}
+			memDB.UnRef()
+
+			memDB = NewMemTable(0, db.VersionSet.cmp)
+			memDB.Ref()
+		}
+
 		err = writeBatch.insertInto(memDB)
 		if err != nil {
 			return err
@@ -559,11 +600,11 @@ func (db *DB) recoverLogFile(fd Fd) error {
 
 	}
 
-	edit := &VersionEdit{}
-
-	err = db.writeLevel0Table(memDB, edit)
-	if err != nil {
-		return err
+	if memDB.Size() > 0 {
+		err = db.writeLevel0Table(memDB, edit)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

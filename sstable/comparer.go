@@ -4,12 +4,17 @@ import "bytes"
 
 type BasicComparer interface {
 	Compare(a, b []byte) int
+	Name() []byte
 }
 
 type BytesComparer struct{}
 
 func (bc BytesComparer) Compare(a, b []byte) int {
 	return bytes.Compare(a, b)
+}
+
+func (bc BytesComparer) Name() []byte {
+	return []byte("bytes.comparer")
 }
 
 type iComparer struct {
@@ -27,6 +32,10 @@ func (ic iComparer) Compare(a, b []byte) int {
 		return 1
 	}
 	return -1
+}
+
+func (ic iComparer) Name() []byte {
+	return []byte("leveldb.InternalKeyComparator")
 }
 
 var DefaultComparer = &BytesComparer{}
