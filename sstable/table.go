@@ -108,8 +108,8 @@ func (vSet *VersionSet) reuseFileNum(fileNum uint64) bool {
 }
 
 func (vSet *VersionSet) markFileUsed(fileNum uint64) bool {
-	if vSet.nextFileNum < fileNum {
-		vSet.nextFileNum = fileNum
+	if vSet.nextFileNum <= fileNum {
+		vSet.nextFileNum = fileNum + 1
 		return true
 	}
 	return false

@@ -446,6 +446,10 @@ func Open(dbpath string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	//todo warn err log
+	err = db.removeObsoleteFiles()
+
 	return db, nil
 }
 
@@ -598,6 +602,8 @@ func (db *DB) recoverLogFile(fd Fd, edit *VersionEdit) error {
 
 		db.seqNum += writeBatch.seq + Sequence(writeBatch.count) - 1
 
+		db.VersionSet.markFileUsed(fd.Num)
+
 	}
 
 	if memDB.Size() > 0 {
@@ -607,6 +613,69 @@ func (db *DB) recoverLogFile(fd Fd, edit *VersionEdit) error {
 		}
 	}
 
+	if db.VersionSet.nextFileNum != db.VersionSet.manifestFd.Num {
+		db.VersionSet.manifestFd = Fd{
+			FileType: KDescriptorFile,
+			Num:      db.VersionSet.allocFileNum(),
+		}
+	}
+
 	return nil
 
+}
+
+// clear the obsolete files
+func (db *DB) removeObsoleteFiles() (err error) {
+
+	assertMutexHeld(&db.rwMutex)
+
+	fds, lErr := db.VersionSet.storage.List()
+	if lErr != nil {
+		err = lErr
+		return
+	}
+
+	version := db.VersionSet.getCurrent()
+
+	liveTableFileSet := make(map[Fd]struct{})
+	for _, levels := range version.levels {
+		for _, v := range levels {
+			liveTableFileSet[v.fd] = struct{}{}
+		}
+	}
+
+	fileToClean := make([]Fd, 0)
+
+	for _, fd := range fds {
+		var keep bool
+		switch fd.FileType {
+		case KDescriptorFile:
+			keep = fd.Num >= db.VersionSet.manifestFd.Num
+		case KJournalFile:
+			keep = fd.Num >= db.VersionSet.stJournalNum
+		case KTableFile:
+			if _, ok := liveTableFileSet[fd]; ok {
+				keep = true
+			}
+		case KCurrentFile, KDBLockFile, KDBTempFile:
+			keep = true
+		}
+
+		if !keep {
+			fileToClean = append(fileToClean, fd)
+		}
+
+	}
+
+	db.rwMutex.Unlock()
+
+	for _, fd := range fileToClean {
+		rErr := db.VersionSet.storage.Remove(fd)
+		if rErr != nil {
+			err = rErr
+		}
+	}
+
+	db.rwMutex.Lock()
+	return
 }
