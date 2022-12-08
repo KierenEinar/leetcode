@@ -30,12 +30,20 @@ type VersionSet struct {
 }
 
 type Version struct {
+	element *list.Element
+	vSet    *VersionSet
 	*BasicReleaser
 	levels [kLevelNum]tFiles
 
 	// compaction
 	cScore float64
 	cLevel int
+}
+
+func newVersion(vSet *VersionSet) *Version {
+	return &Version{
+		vSet: vSet,
+	}
 }
 
 type vBuilder struct {
@@ -348,7 +356,7 @@ func (vSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.RWMutex) erro
 	edit.setNextFile(vSet.nextFileNum)
 
 	// apply new version
-	v := &Version{}
+	v := newVersion(vSet)
 	builder := newBuilder(vSet, vSet.current)
 	builder.apply(*edit)
 	builder.saveTo(v)
@@ -416,9 +424,12 @@ func (vSet *VersionSet) logAndApply(edit *VersionEdit, mutex *sync.RWMutex) erro
 // required: mutex held
 // noted: thread not safe
 func (vSet *VersionSet) appendVersion(v *Version) {
-	vSet.versions.PushFront(v)
+	element := vSet.versions.PushFront(v)
 	old := vSet.current
-	old.UnRef()
+	if old != nil {
+		old.UnRef()
+	}
+	v.element = element
 	vSet.current = v
 	vSet.current.Ref()
 }
@@ -539,7 +550,7 @@ func (vSet *VersionSet) recover(manifest Fd) (err error) {
 
 	vBuilder.saveTo(&version)
 	finalize(&version)
-	vSet.versions.PushBack(&version)
+	vSet.appendVersion(&version)
 	vSet.current = &version
 	vSet.manifestFd = Fd{
 		FileType: KDescriptorFile,
@@ -559,13 +570,23 @@ func (vSet *VersionSet) getCurrent() *Version {
 }
 
 func (vSet *VersionSet) addLiveFiles(expected map[uint64]struct{}) {
-
-	ver := vSet.getCurrent()
-	defer ver.UnRef()
-
-	for _, level := range ver.levels {
-		for _, v := range level {
-			expected[v.fd.Num] = struct{}{}
+	ele := vSet.versions.Front()
+	for ele != nil {
+		ver := ele.Value.(*Version)
+		for _, level := range ver.levels {
+			for _, v := range level {
+				expected[v.fd.Num] = struct{}{}
+			}
 		}
+		ele = ele.Next()
 	}
+}
+
+// UnRef required mutex held
+func (v *Version) UnRef() int32 {
+	res := v.BasicReleaser.UnRef()
+	if res == 0 {
+		v.vSet.versions.Remove(v.element)
+	}
+	return res
 }
