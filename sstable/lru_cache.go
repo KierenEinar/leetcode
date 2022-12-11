@@ -3,6 +3,7 @@ package sstable
 import (
 	"bytes"
 	hash2 "hash"
+	"runtime"
 	"sync"
 )
 
@@ -140,6 +141,17 @@ type LRUCache struct {
 
 	// dummy head
 	lru LRUHandle
+}
+
+func (lruCache *LRUCache) Close() {
+	lruCache.rwMutex.Lock()
+	defer lruCache.rwMutex.Unlock()
+	for inUse := lruCache.inUse.next; inUse != &lruCache.inUse; inUse = inUse.next {
+		lruCache.finishErase(inUse)
+	}
+	assert(lruCache.inUse.next == &lruCache.inUse)
+	lruCache.Prune()
+	runtime.SetFinalizer(lruCache, nil)
 }
 
 func newCache(capacity uint32) *LRUCache {
