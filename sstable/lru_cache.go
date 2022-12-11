@@ -3,17 +3,15 @@ package sstable
 import (
 	"bytes"
 	hash2 "hash"
-	"hash/fnv"
 	"sync"
 )
 
 const htInitSlots = uint32(1 << 2)
 
 type Cache interface {
-	SetCapacity(capacity uint64)
-	Insert(key []byte, hash uint32, charge uint32, value interface{}, deleter func(key []byte, value interface{})) *LRUHandle
-	Lookup(key []byte, hash uint32) *LRUHandle
-	Erase(key []byte, hash uint32) *LRUHandle
+	Insert(key []byte, charge uint32, value interface{}, deleter func(key []byte, value interface{})) *LRUHandle
+	Lookup(key []byte) *LRUHandle
+	Erase(key []byte) *LRUHandle
 	Prune()
 }
 
@@ -31,18 +29,15 @@ type LRUHandle struct {
 	inCache bool
 	deleter func(key []byte, value interface{})
 	charge  uint32
-
-	cache *LRUCache
 }
 
 type HandleTable struct {
-	list   []*LRUHandle
-	slots  uint32
-	size   uint32
-	hash32 hash2.Hash
+	list  []*LRUHandle
+	slots uint32
+	size  uint32
 }
 
-func NewHandleTable(slots uint32, hash32 hash2.Hash) *HandleTable {
+func NewHandleTable(slots uint32) *HandleTable {
 	realSlots := uint32(0)
 	for i := htInitSlots; i < 32; i++ {
 		if slots < 1<<i {
@@ -52,24 +47,28 @@ func NewHandleTable(slots uint32, hash32 hash2.Hash) *HandleTable {
 	}
 
 	return &HandleTable{
-		list:   make([]*LRUHandle, realSlots),
-		hash32: hash32,
-		slots:  realSlots,
-		size:   0,
+		list:  make([]*LRUHandle, realSlots),
+		slots: realSlots,
+		size:  0,
 	}
 }
 
 func (ht *HandleTable) Insert(handle *LRUHandle) *LRUHandle {
 	ptr := ht.FindPointer(handle.key, handle.hash)
 	old := *ptr
+
+	if old == nil {
+		*ptr = handle
+		ht.size++
+		if ht.size > ht.slots {
+			ht.Resize(true)
+		}
+	}
+
 	if old != nil {
 		handle.nextHash = old.nextHash
 	}
-	*ptr = handle
-	ht.size++
-	if ht.size > ht.slots {
-		ht.Resize(true)
-	}
+
 	return old
 }
 
@@ -126,7 +125,7 @@ func (ht *HandleTable) Resize(growth bool) {
 	}
 
 	ht.list = newList
-
+	ht.slots = newSlots
 }
 
 type LRUCache struct {
@@ -143,10 +142,10 @@ type LRUCache struct {
 	lru LRUHandle
 }
 
-func (cache *LRUCache) NewCache(capacity uint32) *LRUCache {
+func newCache(capacity uint32) *LRUCache {
 	c := &LRUCache{
 		capacity: capacity,
-		table:    NewHandleTable(uint32(1<<8), fnv.New32()),
+		table:    NewHandleTable(uint32(1 << 8)),
 		inUse:    LRUHandle{},
 		lru:      LRUHandle{},
 	}
@@ -161,11 +160,11 @@ func (cache *LRUCache) NewCache(capacity uint32) *LRUCache {
 
 }
 
-func (cache *LRUCache) Insert(key []byte, hash uint32, charge uint32,
+func (c *LRUCache) Insert(key []byte, hash uint32, charge uint32,
 	value interface{}, deleter func(key []byte, value interface{})) *LRUHandle {
 
-	cache.rwMutex.Lock()
-	defer cache.rwMutex.Unlock()
+	c.rwMutex.Lock()
+	defer c.rwMutex.Unlock()
 
 	handle := &LRUHandle{
 		hash:    hash,
@@ -177,18 +176,43 @@ func (cache *LRUCache) Insert(key []byte, hash uint32, charge uint32,
 		charge:  charge,
 	}
 
-	handle.inCache = true
 	handle.ref++
-	cache.usage += charge
-	lruAppend(&cache.inUse, handle)
-	cache.finishErase(cache.table.Insert(handle))
+	c.usage += charge
+	lruAppend(&c.inUse, handle)
+	c.finishErase(c.table.Insert(handle))
 
-	for cache.usage > cache.capacity && cache.lru.next != &cache.lru {
-		cache.finishErase(cache.table.Erase(cache.lru.next.key, cache.lru.next.hash))
+	for c.usage > c.capacity && c.lru.next != &c.lru {
+		c.finishErase(c.table.Erase(c.lru.next.key, c.lru.next.hash))
 	}
 
 	return handle
 
+}
+
+func (c *LRUCache) Lookup(key []byte, hash uint32) *LRUHandle {
+	c.rwMutex.RLock()
+	defer c.rwMutex.RUnlock()
+	h := c.table.Lookup(key, hash)
+	if h != nil {
+		c.Ref(h)
+	}
+	return h
+}
+
+func (c *LRUCache) Erase(key []byte, hash uint32) *LRUHandle {
+	c.rwMutex.Lock()
+	defer c.rwMutex.Unlock()
+	h := c.table.Erase(key, hash)
+	c.finishErase(h)
+	return h
+}
+
+func (c *LRUCache) Prune() {
+	c.rwMutex.Lock()
+	defer c.rwMutex.Unlock()
+	for next := c.lru.next; next != &c.lru; next = next.next {
+		c.finishErase(next)
+	}
 }
 
 func lruAppend(lru *LRUHandle, h *LRUHandle) {
@@ -203,24 +227,78 @@ func lruRemove(h *LRUHandle) {
 	h.next.prev = h.prev
 }
 
-func (lruCache *LRUCache) finishErase(h *LRUHandle) {
+func (c *LRUCache) finishErase(h *LRUHandle) {
 	if h != nil {
 		h.inCache = false
 		lruRemove(h)
-		lruCache.usage -= h.charge
-		h.UnRef()
+		c.usage -= h.charge
+		c.UnRef(h)
 	}
 }
 
-func (h *LRUHandle) UnRef() {
+func (c *LRUCache) UnRef(h *LRUHandle) {
 
 	assert(h.ref > 0)
 	h.ref--
 	if h.ref == 0 {
 		h.deleter(h.key, h.value)
-		h.cache = nil
 	} else if h.ref == 1 && h.inCache {
 		lruRemove(h)
-		lruAppend(&h.cache.lru, h)
+		lruAppend(&c.lru, h)
 	}
+}
+
+func (c *LRUCache) Ref(h *LRUHandle) {
+	if h.ref == 1 && h.inCache {
+		lruRemove(h)
+		lruAppend(&c.inUse, h)
+	}
+	h.ref++
+}
+
+const kNumShardBits = 4
+
+type ShardedLRUCache struct {
+	caches [1 << kNumShardBits]*LRUCache
+	hash32 hash2.Hash32
+}
+
+func NewCache(capacity uint32, hash32 hash2.Hash32) Cache {
+
+	caches := [1 << kNumShardBits]*LRUCache{}
+	for i := 0; i < 1<<kNumShardBits; i++ {
+		caches[i] = newCache(capacity)
+	}
+	return &ShardedLRUCache{
+		caches: caches,
+		hash32: hash32,
+	}
+}
+
+func (c *ShardedLRUCache) Insert(key []byte, charge uint32,
+	value interface{}, deleter func(key []byte, value interface{})) *LRUHandle {
+	hash := c.hash(key)
+	return c.caches[hash].Insert(key, hash, charge, value, deleter)
+}
+
+func (c *ShardedLRUCache) Lookup(key []byte) *LRUHandle {
+	hash := c.hash(key)
+	return c.caches[hash].Lookup(key, hash)
+}
+
+func (c *ShardedLRUCache) Erase(key []byte) *LRUHandle {
+	hash := c.hash(key)
+	return c.caches[hash].Erase(key, hash)
+}
+
+func (c *ShardedLRUCache) Prune() {
+	for _, cache := range c.caches {
+		cache.Prune()
+	}
+}
+
+func (c *ShardedLRUCache) hash(key []byte) uint32 {
+	c.hash32.Reset()
+	_, _ = c.hash32.Write(key)
+	return c.hash32.Sum32() >> (32 - kNumShardBits)
 }

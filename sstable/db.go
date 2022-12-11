@@ -648,14 +648,8 @@ func (db *DB) removeObsoleteFiles() (err error) {
 		return
 	}
 
-	version := db.VersionSet.getCurrent()
-
 	liveTableFileSet := make(map[Fd]struct{})
-	for _, levels := range version.levels {
-		for _, v := range levels {
-			liveTableFileSet[v.fd] = struct{}{}
-		}
-	}
+	db.VersionSet.addLiveFiles(liveTableFileSet)
 
 	fileToClean := make([]Fd, 0)
 

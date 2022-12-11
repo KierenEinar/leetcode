@@ -569,13 +569,13 @@ func (vSet *VersionSet) getCurrent() *Version {
 	return current
 }
 
-func (vSet *VersionSet) addLiveFiles(expected map[uint64]struct{}) {
+func (vSet *VersionSet) addLiveFiles(expected map[Fd]struct{}) {
 	ele := vSet.versions.Front()
 	for ele != nil {
 		ver := ele.Value.(*Version)
 		for _, level := range ver.levels {
 			for _, v := range level {
-				expected[v.fd.Num] = struct{}{}
+				expected[v.fd] = struct{}{}
 			}
 		}
 		ele = ele.Next()
