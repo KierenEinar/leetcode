@@ -167,7 +167,7 @@ func newCache(capacity uint32) *LRUCache {
 
 	c.lru.next = &c.lru
 	c.lru.prev = &c.lru
-
+	runtime.SetFinalizer(c, (*LRUCache).Close)
 	return c
 
 }
@@ -280,6 +280,7 @@ func NewCache(capacity uint32, hash32 hash2.Hash32) Cache {
 	caches := [1 << kNumShardBits]*LRUCache{}
 	for i := 0; i < 1<<kNumShardBits; i++ {
 		caches[i] = newCache(capacity)
+
 	}
 	return &ShardedLRUCache{
 		caches: caches,
