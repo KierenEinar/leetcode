@@ -565,7 +565,6 @@ func (vSet *VersionSet) recover(manifest Fd) (err error) {
 
 func (vSet *VersionSet) getCurrent() *Version {
 	current := vSet.current
-	current.Ref()
 	return current
 }
 

@@ -48,6 +48,23 @@ type DB struct {
 }
 
 func (db *DB) get(key []byte) ([]byte, error) {
+	db.rwMutex.RLock()
+	v := db.VersionSet.getCurrent()
+	mem := db.mem
+	imm := db.imm
+	v.Ref()
+	mem.Ref()
+	if imm != nil {
+		imm.Ref()
+	}
+
+	defer func() {
+		v.UnRef()
+		mem.UnRef()
+		if imm != nil {
+			imm.UnRef()
+		}
+	}()
 
 }
 
