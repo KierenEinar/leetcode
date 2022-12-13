@@ -25,7 +25,11 @@ type VersionSet struct {
 
 	tableOperation *tableOperation
 
-	storage   Storage
+	tableCache *TableCache
+
+	storage Storage
+
+	// todo move to db
 	snapshots *list.List
 }
 
@@ -564,8 +568,7 @@ func (vSet *VersionSet) recover(manifest Fd) (err error) {
 }
 
 func (vSet *VersionSet) getCurrent() *Version {
-	current := vSet.current
-	return current
+	return vSet.current
 }
 
 func (vSet *VersionSet) addLiveFiles(expected map[Fd]struct{}) {
@@ -590,14 +593,48 @@ func (v *Version) UnRef() int32 {
 	return res
 }
 
-func (v *Version) get(ikey InternalKey, value *[]byte) error {
+func (v *Version) get(ikey InternalKey, value *[]byte) (err error) {
 
+	userKey := ikey.ukey()
 	match := func(level int, tFile tFile) bool {
+		getErr := v.vSet.tableCache.Get(ikey, tFile, func(rkey InternalKey, rValue []byte) {
+			ukey, kt, _, pErr := parseInternalKey(rkey)
+			if pErr != nil {
+				err = pErr
+
+			} else if bytes.Compare(ukey, userKey) == 0 {
+				switch kt {
+				case keyTypeValue:
+					*value = rValue
+				case keyTypeDel:
+					err = ErrKeyDel
+				default:
+					err = NewErrCorruption("user key")
+				}
+
+			} else {
+				err = ErrNotFound
+			}
+			return
+		})
+
+		if getErr != nil {
+			err = getErr
+			return false
+		}
+
+		if err == ErrNotFound {
+			return true
+		}
+
+		if err == ErrKeyDel {
+			return false
+		}
 
 	}
 
 	v.foreachOverlapping(ikey, match)
-
+	return
 }
 
 func (v *Version) foreachOverlapping(ikey InternalKey, f func(level int, tFile tFile) bool) {

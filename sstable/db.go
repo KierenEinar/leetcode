@@ -3,6 +3,7 @@ package sstable
 import (
 	"container/list"
 	"encoding/binary"
+	"hash/fnv"
 	"io"
 	"os"
 	"sort"
@@ -465,10 +466,11 @@ func Open(dbpath string) (*DB, error) {
 
 	db := &DB{
 		VersionSet: &VersionSet{
-			cmp:       IComparer,
-			storage:   storage,
-			versions:  list.New(),
-			snapshots: list.New(),
+			cmp:        IComparer,
+			storage:    storage,
+			tableCache: NewTableCache(storage, kDefaultCacheFileNums, fnv.New32a()),
+			versions:   list.New(),
+			snapshots:  list.New(),
 		},
 	}
 

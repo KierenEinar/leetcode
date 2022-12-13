@@ -3,7 +3,6 @@ package sstable
 import (
 	"bytes"
 	hash2 "hash"
-	"runtime"
 	"sync"
 )
 
@@ -14,6 +13,8 @@ type Cache interface {
 	Lookup(key []byte) *LRUHandle
 	Erase(key []byte) *LRUHandle
 	Prune()
+	Close()
+	UnRef(h *LRUHandle)
 }
 
 type LRUHandle struct {
@@ -151,7 +152,6 @@ func (lruCache *LRUCache) Close() {
 	}
 	assert(lruCache.inUse.next == &lruCache.inUse)
 	lruCache.Prune()
-	runtime.SetFinalizer(lruCache, nil)
 }
 
 func newCache(capacity uint32) *LRUCache {
@@ -167,7 +167,6 @@ func newCache(capacity uint32) *LRUCache {
 
 	c.lru.next = &c.lru
 	c.lru.prev = &c.lru
-	runtime.SetFinalizer(c, (*LRUCache).Close)
 	return c
 
 }
@@ -280,11 +279,17 @@ func NewCache(capacity uint32, hash32 hash2.Hash32) Cache {
 	caches := [1 << kNumShardBits]*LRUCache{}
 	for i := 0; i < 1<<kNumShardBits; i++ {
 		caches[i] = newCache(capacity)
-
 	}
-	return &ShardedLRUCache{
+	c := &ShardedLRUCache{
 		caches: caches,
 		hash32: hash32,
+	}
+	return c
+}
+
+func (c *ShardedLRUCache) Close() {
+	for _, cache := range c.caches {
+		cache.Close()
 	}
 }
 
@@ -314,4 +319,11 @@ func (c *ShardedLRUCache) hash(key []byte) uint32 {
 	c.hash32.Reset()
 	_, _ = c.hash32.Write(key)
 	return c.hash32.Sum32() >> (32 - kNumShardBits)
+}
+
+func (c *ShardedLRUCache) UnRef(h *LRUHandle) {
+	cache := c.caches[h.hash>>(32-kNumShardBits)]
+	cache.rwMutex.Lock()
+	defer cache.rwMutex.Unlock()
+	cache.UnRef(h)
 }

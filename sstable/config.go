@@ -23,6 +23,7 @@ const kWriteBatchHeaderSize = 12 // first 8 bytes represent sequence, last 4 byt
 const kTypeValue = 1
 const kTypeDel = 2
 const kTypeSeek = kTypeValue
+const kDefaultCacheFileNums = 1000
 
 func maxBytesForLevel(level int) uint64 {
 	result := uint64(kLevel1SizeThreshold)
