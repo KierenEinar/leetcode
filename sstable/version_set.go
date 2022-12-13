@@ -589,3 +589,44 @@ func (v *Version) UnRef() int32 {
 	}
 	return res
 }
+
+func (v *Version) get(ikey InternalKey, value *[]byte) error {
+
+	match := func(level int, tFile tFile) bool {
+
+	}
+
+	v.foreachOverlapping(ikey, match)
+
+}
+
+func (v *Version) foreachOverlapping(ikey InternalKey, f func(level int, tFile tFile) bool) {
+	tmp := make([]tFile, 0)
+	ukey := ikey.ukey()
+	for _, level0 := range v.levels[0] {
+		if bytes.Compare(level0.iMin.ukey(), ukey) <= 0 && bytes.Compare(level0.iMax.ukey(), ukey) >= 0 {
+			tmp = append(tmp, level0)
+		}
+	}
+	sort.Slice(tmp, func(i, j int) bool {
+		return tmp[i].fd.Num > tmp[j].fd.Num
+	})
+
+	for idx := 0; idx < len(tmp); idx++ {
+		if !f(0, tmp[idx]) {
+			return // match case
+		}
+	}
+
+	for level := 1; level < len(v.levels); level++ {
+		lf := v.levels[level]
+		idx := sort.Search(len(lf), func(i int) bool {
+			return bytes.Compare(lf[i].iMax.ukey(), ukey) >= 0
+		})
+		if idx < len(lf) && bytes.Compare(lf[idx].iMin.ukey(), ukey) <= 0 {
+			if !f(level, lf[idx]) {
+				return
+			}
+		}
+	}
+}

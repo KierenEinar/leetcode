@@ -25,4 +25,5 @@ var (
 	ErrMissingChunk             = errors.New("leveldb/journal chunk miss")
 	ErrClosed                   = errors.New("leveldb/shutdown")
 	ErrFileIsDir                = errors.New("leveldb/path is dir")
+	ErrKeyDel                   = errors.New("leveldb/memdb key deleted")
 )

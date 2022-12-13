@@ -22,6 +22,7 @@ const kWriteBatchCountSize = 4
 const kWriteBatchHeaderSize = 12 // first 8 bytes represent sequence, last 4 bytes represent batch count
 const kTypeValue = 1
 const kTypeDel = 2
+const kTypeSeek = kTypeValue
 
 func maxBytesForLevel(level int) uint64 {
 	result := uint64(kLevel1SizeThreshold)

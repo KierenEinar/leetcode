@@ -47,7 +47,8 @@ type DB struct {
 	tableOperation *tableOperation
 }
 
-func (db *DB) get(key []byte) ([]byte, error) {
+func (db *DB) Get(key []byte) ([]byte, error) {
+
 	db.rwMutex.RLock()
 	v := db.VersionSet.getCurrent()
 	mem := db.mem
@@ -57,15 +58,44 @@ func (db *DB) get(key []byte) ([]byte, error) {
 	if imm != nil {
 		imm.Ref()
 	}
+	seq := db.seqNum
+	db.rwMutex.RUnlock()
 
-	defer func() {
-		v.UnRef()
-		mem.UnRef()
-		if imm != nil {
-			imm.UnRef()
+	ikey := buildInternalKey(nil, key, kTypeSeek, seq)
+	var (
+		mErr  error
+		value []byte
+	)
+	if memGet(mem, ikey, &value, &mErr) {
+		// done
+	} else if imm != nil && memGet(imm, ikey, &value, &mErr) {
+		// done
+	} else {
+		mErr = v.get(ikey, &value)
+	}
+}
+
+func memGet(mem *MemDB, ikey InternalKey, value *[]byte, err *error) (ok bool) {
+
+	rKey, rValue, rErr := mem.Find(ikey)
+	if rErr != nil {
+		if rErr == ErrNotFound {
+			if InternalKey(rKey).keyType() == keyTypeDel {
+				ok = true
+				return
+			}
+			ok = false
+			return
 		}
-	}()
+		*err = rErr
+		ok = false
+		return
+	}
 
+	val := append([]byte(nil), rValue...)
+	*value = val
+	ok = true
+	return
 }
 
 func (db *DB) write(batch *WriteBatch) error {
