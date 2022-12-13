@@ -46,7 +46,7 @@ func (memTable *MemDB) Find(ikey InternalKey) (rkey []byte, value []byte, err er
 		if bytes.Compare(ukey, ikey.ukey()) == 0 {
 			rkey = ikeyN
 			if kt == keyTypeDel {
-				err = ErrNotFound
+				err = ErrKeyDel
 				return
 			}
 			value = valueN

@@ -93,18 +93,19 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 
 func memGet(mem *MemDB, ikey InternalKey, value *[]byte, err *error) (ok bool) {
 
-	rKey, rValue, rErr := mem.Find(ikey)
+	_, rValue, rErr := mem.Find(ikey)
 	if rErr != nil {
 		if rErr == ErrNotFound {
-			if InternalKey(rKey).keyType() == keyTypeDel {
-				ok = true
-				return
-			}
 			ok = false
 			return
 		}
+		if rErr == ErrKeyDel {
+			*err = ErrNotFound
+			ok = true
+			return
+		}
 		*err = rErr
-		ok = false
+		ok = true
 		return
 	}
 
