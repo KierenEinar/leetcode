@@ -593,27 +593,33 @@ func (v *Version) UnRef() int32 {
 	return res
 }
 
+type getStat uint8
+
+const (
+	kStatNotFound getStat = iota
+	kStatFound
+	kStatDelete
+	kStatCorruption
+)
+
 func (v *Version) get(ikey InternalKey, value *[]byte) (err error) {
 
 	userKey := ikey.ukey()
+	stat := kStatNotFound
+
 	match := func(level int, tFile tFile) bool {
 		getErr := v.vSet.tableCache.Get(ikey, tFile, func(rkey InternalKey, rValue []byte) {
 			ukey, kt, _, pErr := parseInternalKey(rkey)
 			if pErr != nil {
-				err = pErr
-
+				stat = kStatCorruption
 			} else if bytes.Compare(ukey, userKey) == 0 {
 				switch kt {
 				case keyTypeValue:
 					*value = rValue
+					stat = kStatFound
 				case keyTypeDel:
-					err = ErrKeyDel
-				default:
-					err = NewErrCorruption("user key")
+					stat = kStatDelete
 				}
-
-			} else {
-				err = ErrNotFound
 			}
 			return
 		})
@@ -623,17 +629,33 @@ func (v *Version) get(ikey InternalKey, value *[]byte) (err error) {
 			return false
 		}
 
-		if err == ErrNotFound {
+		switch stat {
+		case kStatCorruption:
+			return false
+		case kStatNotFound:
 			return true
-		}
-
-		if err == ErrKeyDel {
+		case kStatDelete:
+			return false
+		case kStatFound:
+			return false
+		default:
 			return false
 		}
-
 	}
 
 	v.foreachOverlapping(ikey, match)
+
+	if err != nil {
+		return
+	}
+
+	switch stat {
+	case kStatNotFound, kStatDelete:
+		err = ErrNotFound
+	case kStatCorruption:
+		err = NewErrCorruption("leveldb/get key corruption")
+	}
+
 	return
 }
 

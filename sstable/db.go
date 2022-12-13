@@ -74,6 +74,21 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	} else {
 		mErr = v.get(ikey, &value)
 	}
+
+	db.rwMutex.Lock()
+	v.UnRef()
+	db.rwMutex.Unlock()
+
+	mem.UnRef()
+	if imm != nil {
+		imm.UnRef()
+	}
+
+	if mErr != nil {
+		return nil, mErr
+	}
+
+	return value, nil
 }
 
 func memGet(mem *MemDB, ikey InternalKey, value *[]byte, err *error) (ok bool) {
