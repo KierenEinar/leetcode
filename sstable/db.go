@@ -91,6 +91,12 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	return value, nil
 }
 
+func (db *DB) Put(key []byte, value []byte) error {
+	wb := &WriteBatch{}
+	wb.Put(key, value)
+	return db.write(wb)
+}
+
 func memGet(mem *MemDB, ikey InternalKey, value *[]byte, err *error) (ok bool) {
 
 	_, rValue, rErr := mem.Find(ikey)
@@ -99,7 +105,7 @@ func memGet(mem *MemDB, ikey InternalKey, value *[]byte, err *error) (ok bool) {
 			ok = false
 			return
 		}
-		if rErr == ErrKeyDel {
+		if rErr == ErrDeleted {
 			*err = ErrNotFound
 			ok = true
 			return

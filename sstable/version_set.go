@@ -448,7 +448,7 @@ func finalize(v *Version) {
 	for level := 0; level < len(v.levels); level++ {
 		if level == 0 {
 			length := len(v.levels[level])
-			bestScore = float64(length) / kLevel0StopWriteTrigger
+			bestScore = float64(length) / kLevel0CompactionTrigger
 			bestLevel = 0
 		} else {
 			totalSize := uint64(v.levels[level].size())

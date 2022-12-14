@@ -12,6 +12,7 @@ const kJournalBlockSize = 1 << 15
 const kWritableBufferSize = 1 << 16
 const kLevelNum = 7
 const kLevel0SlowDownTrigger = 8
+const kLevel0CompactionTrigger = 4
 const kLevel0StopWriteTrigger = 12
 const kManifestSizeThreshold = 1 << 26 // 64m
 const kMemTableWriteBufferSize = 1 << 22
